@@ -1,0 +1,371 @@
+import customtkinter as ctk
+from tkinter import messagebox
+from datetime import datetime
+
+from styles.base_colors import (
+    HISTORY_ACCENT,
+    HISTORY_ACCENT_HOVER,
+    HISTORY_BUTTON_GRAY,
+    HISTORY_BUTTON_GRAY_HOVER,
+    HISTORY_CARD_COLOR,
+    HISTORY_LINE_COLOR,
+    HISTORY_ROW_HOVER,
+    HISTORY_ROW_SELECTED,
+    TRANSPARENT,
+    WHITE,
+)
+
+
+DISPLAY_TYPE_LABELS = {
+    "diagnostic": "Diagnostic",
+    "modality": "Modality",
+    "clinic": "Clinical",
+    "clinical": "Clinical",
+}
+
+PERIOD_LABELS = {
+    "monthly": "การประเมินรายเดือน",
+    "quarterly": "การประเมินราย 3 เดือน",
+    "annual": "การประเมินประจำปี",
+}
+
+BASELINE_FIRST_MESSAGE = (
+    "เนื่องจากเป็นการทำการทดสอบครั้งที่ 1 จึงจะนำผลการทดสอบครั้งนี้เป็นค่าพื้นฐานที่วัดได้ในครั้งแรก "
+    "(Baseline) ซึ่งจะนำไปใช้ในการเปรียบเทียบผลในครั้งต่อ ๆ ไป"
+)
+
+
+class AfterSaveScreen(ctk.CTkFrame):
+    def __init__(self, master, home_command=None, **kwargs):
+        kwargs.setdefault("fg_color", TRANSPARENT)
+        super().__init__(master, **kwargs)
+
+        self.home_command = home_command
+        self.saved_payload = None
+        self.evaluation = None
+        self._baseline_dialog = None
+        self._baseline_selected = None
+        self._baseline_rows = []
+
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        self.main_frame = ctk.CTkFrame(self, fg_color=TRANSPARENT)
+        self.main_frame.grid(row=0, column=0, sticky="nsew")
+
+    def on_show(self, saved_payload=None, **kwargs):
+        if saved_payload is not None:
+            self.saved_payload = saved_payload
+            self.evaluation = saved_payload.get("evaluation")
+
+        for widget in self.main_frame.winfo_children():
+            widget.destroy()
+        self._build_ui()
+
+    def _build_ui(self):
+        FONT_TH = "TH Sarabun New"
+        FONT_TITLE = (FONT_TH, 28, "bold")
+        FONT_SUB = (FONT_TH, 22, "bold")
+        FONT_LABEL = (FONT_TH, 22, "bold")
+        FONT_VALUE = (FONT_TH, 22, "bold")
+        FONT_BTN = (FONT_TH, 20, "bold")
+
+        payload = self.saved_payload or {}
+        evaluation = self.evaluation or {}
+        rank = payload.get("rank", "-")
+        date_text, time_text = self._format_datetime(evaluation.get("eval_datetime", ""))
+        display_label = DISPLAY_TYPE_LABELS.get(evaluation.get("screen_type", ""), evaluation.get("screen_type", ""))
+        period_label = PERIOD_LABELS.get(evaluation.get("period", ""), evaluation.get("period", ""))
+
+        card = ctk.CTkFrame(self.main_frame, corner_radius=16, fg_color=HISTORY_CARD_COLOR)
+        card.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.92, relheight=0.92)
+        card.grid_columnconfigure(0, weight=1)
+
+        ctk.CTkLabel(
+            card,
+            text=f"บันทึกข้อมูลการทดสอบครั้งที่ {rank} สำเร็จ",
+            font=FONT_TITLE,
+            text_color=WHITE,
+        ).grid(row=0, column=0, pady=(18, 10))
+
+        ctk.CTkFrame(card, height=1, fg_color=HISTORY_LINE_COLOR).grid(
+            row=1, column=0, sticky="ew", padx=90, pady=(0, 18)
+        )
+
+        ctk.CTkLabel(
+            card,
+            text=f"{display_label} {period_label}".strip(),
+            font=FONT_SUB,
+            text_color=WHITE,
+        ).grid(row=2, column=0, pady=(0, 18))
+
+        info = ctk.CTkFrame(card, fg_color=TRANSPARENT)
+        info.grid(row=3, column=0, padx=180, sticky="ew")
+        info.grid_columnconfigure(0, weight=1)
+        info.grid_columnconfigure(1, weight=1)
+
+        pairs = [
+            ("โรงพยาบาล", evaluation.get("hospital_name", "")),
+            ("ผู้ประเมิน", evaluation.get("evaluator_name", "")),
+            ("หมายเลขครุภัณฑ์", evaluation.get("screen_model", "")),
+            ("วันที่และเวลาในการทดสอบ", f"{date_text}      {time_text}".strip()),
+        ]
+
+        for idx, (label, value) in enumerate(pairs):
+            ctk.CTkLabel(info, text=label, font=FONT_LABEL, text_color=WHITE, anchor="w").grid(
+                row=idx, column=0, sticky="w", pady=16
+            )
+            ctk.CTkLabel(info, text=value, font=FONT_VALUE, text_color=WHITE, anchor="w").grid(
+                row=idx, column=1, sticky="w", pady=16
+            )
+
+        bottom = ctk.CTkFrame(card, fg_color=TRANSPARENT)
+        bottom.grid(row=4, column=0, sticky="ew", padx=28, pady=(120, 24))
+
+        ctk.CTkButton(
+            bottom,
+            text="กลับหน้าหลัก",
+            font=FONT_BTN,
+            width=200,
+            height=48,
+            corner_radius=24,
+            fg_color=HISTORY_BUTTON_GRAY,
+            hover_color=HISTORY_BUTTON_GRAY_HOVER,
+            text_color=WHITE,
+            command=self._go_home,
+        ).pack(side="left", padx=(0, 12))
+
+        ctk.CTkButton(
+            bottom,
+            text="เกณฑ์และวิธีการแก้ไขปัญหา",
+            font=FONT_BTN,
+            width=280,
+            height=48,
+            corner_radius=24,
+            fg_color=HISTORY_BUTTON_GRAY,
+            hover_color=HISTORY_BUTTON_GRAY_HOVER,
+            text_color=WHITE,
+            command=self._open_criteria,
+        ).pack(side="left")
+
+        ctk.CTkButton(
+            bottom,
+            text="ทำการเปรียบเทียบกับ base line",
+            font=FONT_BTN,
+            width=300,
+            height=48,
+            corner_radius=24,
+            fg_color=HISTORY_ACCENT,
+            hover_color=HISTORY_ACCENT_HOVER,
+            text_color=WHITE,
+            command=self._compare,
+        ).pack(side="right")
+
+    def _open_criteria(self):
+        evaluation = self.evaluation or {}
+        self.master.show_screen(
+            "criteria",
+            bypass_auth=True,
+            display_type=evaluation.get("screen_type", ""),
+            period=evaluation.get("period", ""),
+        )
+
+    def _compare(self):
+        payload = self.saved_payload or {}
+        if payload.get("is_first"):
+            messagebox.showinfo("Baseline", BASELINE_FIRST_MESSAGE)
+            return
+
+        if not self.evaluation:
+            return
+        self._show_baseline_picker_dialog(self.evaluation)
+
+    def _show_baseline_picker_dialog(self, current_evaluation):
+        from database.database import get_evaluations_before
+
+        self._close_baseline_dialog()
+        rows = get_evaluations_before(
+            current_evaluation.get("screen_type", ""),
+            current_evaluation.get("period", ""),
+            current_evaluation.get("id", 0),
+        )
+
+        dlg = ctk.CTkToplevel(self)
+        self._baseline_dialog = dlg
+        self._baseline_selected = None
+        self._baseline_rows = []
+
+        dlg.title("")
+        dlg.attributes("-topmost", True)
+        dlg.resizable(False, False)
+        dlg.transient(self.winfo_toplevel())
+        dlg.grab_set()
+        dlg.configure(fg_color=HISTORY_CARD_COLOR)
+
+        width, height = 1040, 720
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        dlg.geometry(f"{width}x{height}+{(sw-width)//2}+{(sh-height)//2}")
+
+        FONT_TH = "TH Sarabun New"
+        title_font = (FONT_TH, 28, "bold")
+        header_font = (FONT_TH, 22, "bold")
+        row_font = (FONT_TH, 20, "bold")
+        btn_font = (FONT_TH, 20, "bold")
+
+        dlg.grid_columnconfigure(0, weight=1)
+        dlg.grid_rowconfigure(1, weight=1)
+
+        ctk.CTkLabel(
+            dlg,
+            text="เลือกรอบที่ต้องการเทียบ Baseline",
+            font=title_font,
+            text_color=WHITE,
+        ).grid(row=0, column=0, pady=(22, 18))
+
+        list_card = ctk.CTkFrame(dlg, fg_color=("#5B5E64", "#5B5E64"), corner_radius=18)
+        list_card.grid(row=1, column=0, sticky="nsew", padx=68, pady=(0, 16))
+        list_card.grid_rowconfigure(2, weight=1)
+        list_card.grid_columnconfigure(0, weight=1)
+
+        header = ctk.CTkFrame(list_card, fg_color=TRANSPARENT)
+        header.grid(row=0, column=0, sticky="ew", padx=22, pady=(18, 6))
+        for idx, text in enumerate(["ครั้งที่", "วัน", "เวลา", "ชื่อ-นามสกุล"]):
+            header.grid_columnconfigure(idx, weight=1)
+            ctk.CTkLabel(header, text=text, font=header_font, text_color=WHITE).grid(
+                row=0, column=idx, sticky="ew"
+            )
+
+        ctk.CTkFrame(list_card, height=1, fg_color=HISTORY_LINE_COLOR).grid(
+            row=1, column=0, sticky="new", padx=18
+        )
+
+        table = ctk.CTkScrollableFrame(
+            list_card,
+            fg_color=TRANSPARENT,
+            scrollbar_button_color=HISTORY_BUTTON_GRAY,
+            scrollbar_button_hover_color=HISTORY_BUTTON_GRAY_HOVER,
+        )
+        table.grid(row=2, column=0, sticky="nsew", padx=14, pady=(8, 14))
+        table.grid_columnconfigure(0, weight=1)
+        table.grid_anchor("nw")
+
+        for idx, row in enumerate(rows):
+            date_text, time_text = self._format_datetime(row.get("eval_datetime", ""))
+            item = ctk.CTkFrame(table, fg_color=TRANSPARENT, corner_radius=14, border_width=0)
+            item.grid(row=idx * 2, column=0, sticky="ew", pady=(0, 8))
+            item.grid_columnconfigure(0, weight=1)
+            item.grid_columnconfigure(1, weight=1)
+            item.grid_columnconfigure(2, weight=1)
+            item.grid_columnconfigure(3, weight=1)
+            item.configure(cursor="hand2")
+
+            labels = []
+            for col, text in enumerate([
+                f"ครั้งที่ {row.get('rank', '-')}",
+                date_text or "-",
+                time_text or "-",
+                row.get("evaluator_name", "-"),
+            ]):
+                lbl = ctk.CTkLabel(
+                    item,
+                    text=text,
+                    font=row_font,
+                    text_color=WHITE,
+                    anchor="center",
+                    cursor="hand2",
+                )
+                lbl.grid(row=0, column=col, sticky="ew", padx=10, pady=12)
+                labels.append(lbl)
+
+            divider = ctk.CTkFrame(item, height=1, fg_color=HISTORY_LINE_COLOR)
+            divider.grid(row=1, column=0, columnspan=4, sticky="ew", padx=18, pady=(0, 2))
+
+            self._baseline_rows.append((item, labels, row, divider))
+            for widget in [item, *labels, divider]:
+                widget.bind("<Button-1>", lambda _e, rec=row: self._select_baseline_row(rec))
+                widget.bind("<Double-Button-1>", lambda _e, rec=row: self._confirm_baseline_selection(current_evaluation, rec))
+                widget.bind("<Enter>", lambda _e, rec=row: self._hover_baseline_row(rec, True))
+                widget.bind("<Leave>", lambda _e, rec=row: self._hover_baseline_row(rec, False))
+
+        btns = ctk.CTkFrame(dlg, fg_color=TRANSPARENT)
+        btns.grid(row=2, column=0, sticky="e", padx=68, pady=(0, 18))
+
+        ctk.CTkButton(
+            btns,
+            text="ยกเลิก",
+            font=btn_font,
+            width=190,
+            height=46,
+            corner_radius=23,
+            fg_color=HISTORY_BUTTON_GRAY,
+            hover_color=HISTORY_BUTTON_GRAY_HOVER,
+            text_color=WHITE,
+            command=self._close_baseline_dialog,
+        ).pack(side="left", padx=(0, 12))
+
+        self._baseline_confirm_btn = ctk.CTkButton(
+            btns,
+            text="ยืนยัน",
+            font=btn_font,
+            width=190,
+            height=46,
+            corner_radius=23,
+            fg_color=HISTORY_ACCENT,
+            hover_color=HISTORY_ACCENT_HOVER,
+            text_color=WHITE,
+            state="disabled",
+            command=lambda: self._confirm_baseline_selection(current_evaluation),
+        )
+        self._baseline_confirm_btn.pack(side="left")
+
+    def _select_baseline_row(self, record):
+        self._baseline_selected = record
+        for frame, labels, row, divider in self._baseline_rows:
+            is_selected = row.get("id") == record.get("id")
+            frame.configure(fg_color=HISTORY_ROW_SELECTED if is_selected else TRANSPARENT)
+            divider.configure(fg_color=TRANSPARENT if is_selected else HISTORY_LINE_COLOR)
+            for label in labels:
+                label.configure(text_color=WHITE)
+        if hasattr(self, "_baseline_confirm_btn"):
+            self._baseline_confirm_btn.configure(state="normal")
+
+    def _hover_baseline_row(self, record, is_hover):
+        for frame, labels, row, divider in self._baseline_rows:
+            is_selected = self._baseline_selected and row.get("id") == self._baseline_selected.get("id")
+            if row.get("id") != record.get("id") or is_selected:
+                continue
+            frame.configure(fg_color=HISTORY_ROW_HOVER if is_hover else TRANSPARENT)
+            divider.configure(fg_color=HISTORY_LINE_COLOR)
+            for label in labels:
+                label.configure(text_color=WHITE)
+
+    def _confirm_baseline_selection(self, current_evaluation, record=None):
+        selected = record or self._baseline_selected
+        if not selected:
+            return
+        self._close_baseline_dialog()
+        self.master.handle_open_baseline_comparison(current_evaluation, selected)
+
+    def _go_home(self):
+        if self.home_command:
+            self.home_command()
+
+    def _close_baseline_dialog(self):
+        if self._baseline_dialog and self._baseline_dialog.winfo_exists():
+            self._baseline_dialog.grab_release()
+            self._baseline_dialog.destroy()
+        self._baseline_dialog = None
+        self._baseline_selected = None
+        self._baseline_rows = []
+
+    def _format_datetime(self, value: str):
+        if not value:
+            return "", ""
+        for fmt in ("%Y-%m-%dT%H:%M:%S.%f", "%Y-%m-%dT%H:%M:%S", "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M"):
+            try:
+                dt = datetime.strptime(value, fmt)
+                return dt.strftime("%d/%m/%Y"), dt.strftime("%H:%M:%S")
+            except ValueError:
+                continue
+        return value, ""

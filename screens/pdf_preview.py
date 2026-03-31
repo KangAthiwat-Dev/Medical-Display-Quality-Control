@@ -1,0 +1,188 @@
+from pathlib import Path
+from tkinter import filedialog, messagebox
+
+import customtkinter as ctk
+from PIL import ImageTk
+
+from services.reports.pdf_render import get_page_count, render_page
+from styles.base_colors import (
+    HISTORY_ACCENT,
+    HISTORY_ACCENT_HOVER,
+    HISTORY_BUTTON_GRAY,
+    HISTORY_BUTTON_GRAY_HOVER,
+    HISTORY_CARD_COLOR,
+    HISTORY_LINE_COLOR,
+    TRANSPARENT,
+    WHITE,
+)
+
+
+class PdfPreviewScreen(ctk.CTkFrame):
+    def __init__(self, master, back_command=None, **kwargs):
+        kwargs.setdefault("fg_color", TRANSPARENT)
+        super().__init__(master, **kwargs)
+
+        self.back_command = back_command
+        self.pdf_bytes = b""
+        self.default_filename = "report.pdf"
+        self.title_text = "Preview PDF"
+        self.page_index = 0
+        self.page_count = 0
+        self._tk_img = None
+
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        self.main_frame = ctk.CTkFrame(self, fg_color=TRANSPARENT)
+        self.main_frame.grid(row=0, column=0, sticky="nsew")
+
+    def on_show(self, pdf_bytes=None, title_text=None, default_filename=None, **kwargs):
+        if pdf_bytes is not None:
+            self.pdf_bytes = pdf_bytes
+            self.page_count = get_page_count(pdf_bytes) if pdf_bytes else 0
+            self.page_index = 0
+        if title_text:
+            self.title_text = title_text
+        if default_filename:
+            self.default_filename = default_filename
+
+        for widget in self.main_frame.winfo_children():
+            widget.destroy()
+        self._build_ui()
+        self.after(50, self._render_current_page)
+
+    def _build_ui(self):
+        FONT_TH = "TH Sarabun New"
+        FONT_TITLE = (FONT_TH, 28, "bold")
+        FONT_BTN = (FONT_TH, 18, "bold")
+        FONT_META = (FONT_TH, 17, "bold")
+
+        card = ctk.CTkFrame(self.main_frame, corner_radius=16, fg_color=HISTORY_CARD_COLOR)
+        card.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.94, relheight=0.94)
+        card.grid_rowconfigure(2, weight=1)
+        card.grid_columnconfigure(0, weight=1)
+
+        top = ctk.CTkFrame(card, fg_color=TRANSPARENT)
+        top.grid(row=0, column=0, sticky="ew", padx=24, pady=(18, 10))
+
+        ctk.CTkButton(
+            top,
+            text="↩",
+            font=(FONT_TH, 20, "bold"),
+            width=52,
+            height=38,
+            corner_radius=19,
+            fg_color=HISTORY_BUTTON_GRAY,
+            hover_color=HISTORY_BUTTON_GRAY_HOVER,
+            text_color=WHITE,
+            command=self._on_back,
+        ).pack(side="left")
+
+        ctk.CTkLabel(top, text=self.title_text, font=FONT_TITLE, text_color=WHITE).pack(side="left", expand=True)
+
+        ctk.CTkFrame(card, height=1, fg_color=HISTORY_LINE_COLOR).grid(row=1, column=0, sticky="ew", padx=24)
+
+        body = ctk.CTkScrollableFrame(
+            card,
+            fg_color=TRANSPARENT,
+            scrollbar_button_color=HISTORY_BUTTON_GRAY,
+            scrollbar_button_hover_color=HISTORY_BUTTON_GRAY_HOVER,
+        )
+        body.grid(row=2, column=0, sticky="nsew", padx=24, pady=(12, 12))
+        body.grid_columnconfigure(0, weight=1)
+
+        self.preview_label = ctk.CTkLabel(body, text="")
+        self.preview_label.grid(row=0, column=0, sticky="n", pady=(0, 8))
+
+        bottom = ctk.CTkFrame(card, fg_color=TRANSPARENT)
+        bottom.grid(row=3, column=0, sticky="ew", padx=24, pady=(0, 18))
+
+        nav = ctk.CTkFrame(bottom, fg_color=TRANSPARENT)
+        nav.pack(side="left")
+
+        self.prev_btn = ctk.CTkButton(
+            nav,
+            text="ก่อนหน้า",
+            font=FONT_BTN,
+            width=120,
+            height=44,
+            corner_radius=22,
+            fg_color=HISTORY_BUTTON_GRAY,
+            hover_color=HISTORY_BUTTON_GRAY_HOVER,
+            text_color=WHITE,
+            command=self._prev_page,
+        )
+        self.prev_btn.pack(side="left")
+
+        self.page_label = ctk.CTkLabel(nav, text="", font=FONT_META, text_color=WHITE)
+        self.page_label.pack(side="left", padx=14)
+
+        self.next_btn = ctk.CTkButton(
+            nav,
+            text="ถัดไป",
+            font=FONT_BTN,
+            width=120,
+            height=44,
+            corner_radius=22,
+            fg_color=HISTORY_BUTTON_GRAY,
+            hover_color=HISTORY_BUTTON_GRAY_HOVER,
+            text_color=WHITE,
+            command=self._next_page,
+        )
+        self.next_btn.pack(side="left")
+
+        ctk.CTkButton(
+            bottom,
+            text="บันทึก PDF",
+            font=FONT_BTN,
+            width=180,
+            height=44,
+            corner_radius=22,
+            fg_color=HISTORY_ACCENT,
+            hover_color=HISTORY_ACCENT_HOVER,
+            text_color=WHITE,
+            command=self._save_pdf,
+        ).pack(side="right")
+
+    def _render_current_page(self):
+        if not self.pdf_bytes or self.page_count == 0:
+            self.preview_label.configure(text="ไม่พบข้อมูล PDF สำหรับแสดง preview", image=None)
+            self.page_label.configure(text="หน้า 0/0")
+            return
+
+        image = render_page(self.pdf_bytes, self.page_index, scale=1.6)
+        max_w = max(400, self.winfo_width() - 180)
+        if image.width > max_w:
+            ratio = max_w / image.width
+            image = image.resize((int(image.width * ratio), int(image.height * ratio)))
+
+        self._tk_img = ImageTk.PhotoImage(image)
+        self.preview_label.configure(image=self._tk_img, text="")
+        self.page_label.configure(text=f"หน้า {self.page_index + 1}/{self.page_count}")
+        self.prev_btn.configure(state="normal" if self.page_index > 0 else "disabled")
+        self.next_btn.configure(state="normal" if self.page_index < self.page_count - 1 else "disabled")
+
+    def _prev_page(self):
+        if self.page_index > 0:
+            self.page_index -= 1
+            self._render_current_page()
+
+    def _next_page(self):
+        if self.page_index < self.page_count - 1:
+            self.page_index += 1
+            self._render_current_page()
+
+    def _save_pdf(self):
+        path = filedialog.asksaveasfilename(
+            defaultextension=".pdf",
+            filetypes=[("PDF files", "*.pdf")],
+            initialfile=self.default_filename,
+        )
+        if not path:
+            return
+        Path(path).write_bytes(self.pdf_bytes)
+        messagebox.showinfo("บันทึกสำเร็จ", f"บันทึกไฟล์ PDF เรียบร้อยแล้ว\n{path}")
+
+    def _on_back(self):
+        if self.back_command:
+            self.back_command()
