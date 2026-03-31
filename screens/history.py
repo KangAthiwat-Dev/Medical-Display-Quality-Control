@@ -80,8 +80,6 @@ class HistoryScreen(ctk.CTkFrame):
         self._multi_select_mode = False
         self._checked_ids = set()
         self._perf_enabled = os.environ.get("MEDICAL_PERF", "").strip() not in ("", "0", "false", "False")
-        self._filter_after_id = None
-        self._remote_search_after_id = None
 
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=1)
@@ -145,6 +143,8 @@ class HistoryScreen(ctk.CTkFrame):
         search_bar.grid_columnconfigure(0, weight=3)
         search_bar.grid_columnconfigure(1, weight=2)
         search_bar.grid_columnconfigure(2, weight=2)
+        search_bar.grid_columnconfigure(3, weight=0)
+        search_bar.grid_columnconfigure(4, weight=0)
 
         hospital_panel = ctk.CTkFrame(search_bar, fg_color=HISTORY_SEARCH_PANEL, corner_radius=18)
         hospital_panel.grid(row=0, column=0, sticky="ew", padx=(14, 8), pady=8)
@@ -251,6 +251,37 @@ class HistoryScreen(ctk.CTkFrame):
             placeholder_text_color=HISTORY_PLACEHOLDER, border_width=0,
         )
         self.date_to_entry.grid(row=1, column=0, sticky="ew", padx=12, pady=(0, 8))
+
+        actions_panel = ctk.CTkFrame(search_bar, fg_color=TRANSPARENT)
+        actions_panel.grid(row=0, column=3, columnspan=2, sticky="e", padx=(0, 14), pady=8)
+
+        self.search_btn = ctk.CTkButton(
+            actions_panel,
+            text="ค้นหา",
+            font=FONT_BTN,
+            height=40,
+            width=120,
+            corner_radius=16,
+            fg_color=HISTORY_ACCENT,
+            hover_color=HISTORY_ACCENT_HOVER,
+            text_color=WHITE,
+            command=self._on_search,
+        )
+        self.search_btn.pack(side="left", padx=(0, 8))
+
+        self.clear_btn = ctk.CTkButton(
+            actions_panel,
+            text="ล้างตัวกรอง",
+            font=FONT_BTN,
+            height=40,
+            width=140,
+            corner_radius=16,
+            fg_color=HISTORY_BUTTON_GRAY,
+            hover_color=HISTORY_BUTTON_GRAY_HOVER,
+            text_color=WHITE,
+            command=self._on_clear_filters,
+        )
+        self.clear_btn.pack(side="left")
 
         self._error_label = ctk.CTkLabel(
             card,
@@ -374,11 +405,6 @@ class HistoryScreen(ctk.CTkFrame):
 
         self._update_selection_mode_ui()
 
-        self.hospital_entry.bind("<KeyRelease>", self._on_filter_change)
-        self.date_from_entry.bind("<KeyRelease>", self._on_filter_change)
-        self.date_to_entry.bind("<KeyRelease>", self._on_filter_change)
-        self.type_dropdown.configure(command=lambda _: self._on_filter_change())
-        self.round_dropdown.configure(command=lambda _: self._on_filter_change())
 
     # ──────────────────────────────────────────────
     def _render_rows(self, reset_scroll: bool = True):
@@ -611,6 +637,13 @@ class HistoryScreen(ctk.CTkFrame):
     def _sort_records(self, records):
         return sorted(records, key=self._record_sort_key, reverse=True)
 
+    def on_show(self, **kwargs):
+        if hasattr(self, "search_entry"):
+            pass
+
+    def on_hide(self, **kwargs):
+        pass
+
     # ── Public ──
     def set_records(self, records: list):
         self._all_records = self._sort_records(list(records))
@@ -621,29 +654,26 @@ class HistoryScreen(ctk.CTkFrame):
             return self.records[self._selected_idx]
         return None
 
-    def on_show(self, **kwargs):
-        if hasattr(self, "hospital_entry"):
-            self.after(0, self.hospital_entry.focus_set)
-
-    def on_hide(self, **kwargs):
-        self._cancel_pending_filters()
-
-    def _cancel_pending_filters(self):
-        for attr in ("_filter_after_id", "_remote_search_after_id"):
-            after_id = getattr(self, attr, None)
-            if after_id is not None:
-                try:
-                    self.after_cancel(after_id)
-                except Exception:
-                    pass
-                setattr(self, attr, None)
-
     # ── Callbacks ──
     def _on_back(self):
         if self.back_command:
             self.back_command()
 
     def _on_search(self):
+        self._hide_table_error()
+        self._apply_filters()
+
+    def _on_clear_filters(self):
+        self.hospital_entry.delete(0, "end")
+        self.type_var.set(self.display_type_options[0])
+        self.type_dropdown.set(self.display_type_options[0])
+        self.round_var.set(self.round_options[0])
+        self.round_dropdown.set(self.round_options[0])
+        self.date_from_entry.delete(0, "end")
+        self.date_to_entry.delete(0, "end")
+        self._hide_table_error()
+        self._error_label.configure(text="")
+        self._error_label.grid_configure(pady=(0, 0))
         self._apply_filters()
 
     def _on_detail(self):
@@ -705,17 +735,9 @@ class HistoryScreen(ctk.CTkFrame):
         return datetime.strptime(value, "%d/%m/%Y").strftime("%Y-%m-%d")
 
     def _on_filter_change(self, event=None):
-        self._cancel_pending_filters()
-        self._filter_after_id = self.after(30, lambda: self._apply_filters(local_only=True))
-        if self.search_command:
-            self._remote_search_after_id = self.after(260, lambda: self._apply_filters(local_only=False))
+        return
 
     def _apply_filters(self, local_only: bool = False):
-        if local_only:
-            self._filter_after_id = None
-        else:
-            self._remote_search_after_id = None
-
         hospital = self.hospital_entry.get().strip()
         display_type_label = self.type_var.get()
         round_label = self.round_var.get()
