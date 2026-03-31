@@ -1,4 +1,5 @@
 import customtkinter as ctk
+from widgets.nav_bar import NavBarWidget
 from widgets.side_bar import SideBarWidget
 
 
@@ -20,17 +21,26 @@ class EvaluatorListScreen(ctk.CTkFrame):
         self.all_evaluators = self.evaluators.copy()
         self._delete_dialog = None
 
-        self.grid_rowconfigure(0, weight=1)
-        self.grid_columnconfigure(1, weight=1)
+        # กางโครงสร้างแบ่งหน้าจอเป็น 3 โซน (1. Navbar บนสุดพาดขวาง 2. Sidebar ซ้าย 3. Main Content ขวา)
+        self.grid_rowconfigure(0, weight=0) # แถว 0 ล็อกความสูงพอดีตาม Navbar
+        self.grid_rowconfigure(1, weight=1) # แถว 1 ยืดเต็มจออิสระ
+        self.grid_columnconfigure(0, weight=0) # คอลัมน์ 0 ล็อกความกว้างตาม Sidebar
+        self.grid_columnconfigure(1, weight=1) # คอลัมน์ 1 ยืดพื้นที่ที่เหลืออิสระ
 
-        # ── Sidebar ──
+        # =============== NAVBAR ===============
+        self.navbar = NavBarWidget(self)
+        self.navbar.grid(row=0, column=0, columnspan=2, sticky="ew")
+
+        self.navbar_separator = ctk.CTkFrame(self, height=1, fg_color=("#cccccc", "#333333"))
+        self.navbar_separator.grid(row=0, column=0, columnspan=2, sticky="sew")
+
+        # =============== ICON BAR ===============
         self.sidebar = SideBarWidget(self, navigate_command=self.master.show_screen)
-        self.sidebar.grid(row=0, column=0, sticky="nsew")
-        ctk.CTkFrame(self, width=1, fg_color=("#cccccc", "#333333")).grid(row=0, column=0, sticky="nse")
+        self.sidebar.grid(row=1, column=0, sticky="nsew")
 
-        # ── Main ──
+        # =============== MAIN CONTENT ===============
         self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
-        self.main_frame.grid(row=0, column=1, sticky="nsew")
+        self.main_frame.grid(row=1, column=1, sticky="nsew")
 
         self._build_ui()
 

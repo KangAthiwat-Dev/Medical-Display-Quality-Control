@@ -29,8 +29,13 @@ class App(ctk.CTk):
     def __init__(self):
         super().__init__()
         self.title("Medical Display Quality Control")
-        self.state('zoomed')
-        # self.resizable(width=False, height=False)
+        
+        # เปิดหน้าต่างแบบเต็มจอ (True Fullscreen)
+        self.attributes("-fullscreen", True)
+        # กดปุ่ม Escape เพื่อออกจากโหมดเต็มจอ
+        self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
+        
+        self.resizable(width=True, height=True)
         self.minsize(width=1024, height=768)
         self.configure(fg_color=("#F0F0F0", "#222222"))
 
