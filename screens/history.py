@@ -80,6 +80,8 @@ class HistoryScreen(ctk.CTkFrame):
         self._multi_select_mode = False
         self._checked_ids = set()
         self._perf_enabled = os.environ.get("MEDICAL_PERF", "").strip() not in ("", "0", "false", "False")
+        self._filter_after_id = None
+        self._remote_search_after_id = None
 
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=1)
@@ -619,6 +621,23 @@ class HistoryScreen(ctk.CTkFrame):
             return self.records[self._selected_idx]
         return None
 
+    def on_show(self, **kwargs):
+        if hasattr(self, "hospital_entry"):
+            self.after(0, self.hospital_entry.focus_set)
+
+    def on_hide(self, **kwargs):
+        self._cancel_pending_filters()
+
+    def _cancel_pending_filters(self):
+        for attr in ("_filter_after_id", "_remote_search_after_id"):
+            after_id = getattr(self, attr, None)
+            if after_id is not None:
+                try:
+                    self.after_cancel(after_id)
+                except Exception:
+                    pass
+                setattr(self, attr, None)
+
     # ── Callbacks ──
     def _on_back(self):
         if self.back_command:
@@ -686,9 +705,17 @@ class HistoryScreen(ctk.CTkFrame):
         return datetime.strptime(value, "%d/%m/%Y").strftime("%Y-%m-%d")
 
     def _on_filter_change(self, event=None):
-        self.after(10, self._apply_filters)
+        self._cancel_pending_filters()
+        self._filter_after_id = self.after(30, lambda: self._apply_filters(local_only=True))
+        if self.search_command:
+            self._remote_search_after_id = self.after(260, lambda: self._apply_filters(local_only=False))
 
     def _apply_filters(self, local_only: bool = False):
+        if local_only:
+            self._filter_after_id = None
+        else:
+            self._remote_search_after_id = None
+
         hospital = self.hospital_entry.get().strip()
         display_type_label = self.type_var.get()
         round_label = self.round_var.get()

@@ -79,6 +79,11 @@ class HistoryDetailScreen(ctk.CTkFrame):
             self.results = self._build_results()
         self._build_ui()
         self._update_view()
+        if getattr(self, "_body_canvas", None) is not None:
+            self.after(0, lambda: self._body_canvas.yview_moveto(0))
+
+    def on_hide(self, **kwargs):
+        self._close_baseline_dialog()
 
     def _build_results(self):
         if not self.evaluation:
@@ -229,6 +234,10 @@ class HistoryDetailScreen(ctk.CTkFrame):
         body.grid_columnconfigure(2, weight=2)
         body.grid_anchor("nw")
         self._body = body
+        try:
+            self._body_canvas = body._parent_canvas
+        except Exception:
+            self._body_canvas = None
 
         self._empty_label = ctk.CTkLabel(
             body,
