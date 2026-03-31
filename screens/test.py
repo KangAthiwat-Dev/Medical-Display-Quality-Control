@@ -1,5 +1,4 @@
 import os
-import time
 from collections import OrderedDict
 import tkinter as tk
 import customtkinter as ctk
@@ -73,10 +72,6 @@ class TestScreen(ctk.CTkFrame):
         super().__init__(master, **kw)
         self.app = master
         self._back = back_command
-        self._perf_enabled = os.environ.get("MEDICAL_PERF", "").strip() not in ("", "0", "false", "False")
-        self._cache_target_size = (1920, 1080)
-        self._seq_cache_max_frames = self._env_int("MEDICAL_CACHE_SEQ_FRAMES", 128, min_value=0, max_value=5000)
-        self._sequence_image_cache = OrderedDict()  # (frame_path, w, h) -> ImageTk.PhotoImage (LRU)
 
         # state
         self._items = []
@@ -84,6 +79,7 @@ class TestScreen(ctk.CTkFrame):
         self._answers = {}
         self._card_win = None
         self._tk_img = None
+        self._canvas_img_id = None
         self._channel_vars = {}
         self._popup_win = None     # popup สำหรับ display / help
         self._sequence_states = {}
@@ -98,6 +94,16 @@ class TestScreen(ctk.CTkFrame):
         self._dock = DockBarWidget(self, command=self._on_dock_click)
         self._dock.place(x=-60, rely=0.5, anchor="w")
         self._dock_visible = False
+
+        self._cache_target_size = (1920, 1080)
+        self._seq_cache_max_frames = self._env_int(
+            "MEDICAL_CACHE_SEQ_FRAMES", 128, min_value=0, max_value=5000
+        )
+        self._sequence_image_cache = OrderedDict()  # (frame_path, w, h) -> ImageTk.PhotoImage
+        self._pattern_cache_max = self._env_int(
+            "MEDICAL_CACHE_PATTERNS", 64, min_value=0, max_value=5000
+        )
+        self._pattern_image_cache = OrderedDict()  # (display_type, period, item_id, w, h) -> ImageTk.PhotoImage
 
         # Bind hover events
         self.bind("<Motion>", self._handle_mouse_motion, add="+")
@@ -163,6 +169,33 @@ class TestScreen(ctk.CTkFrame):
         self._sequence_image_cache[key] = value
         while len(self._sequence_image_cache) > self._seq_cache_max_frames:
             self._sequence_image_cache.popitem(last=False)
+
+    def _pattern_cache_get(self, key):
+        try:
+            val = self._pattern_image_cache.pop(key)
+        except KeyError:
+            return None
+        self._pattern_image_cache[key] = val
+        return val
+
+    def _pattern_cache_put(self, key, value):
+        if self._pattern_cache_max <= 0:
+            return
+        if key in self._pattern_image_cache:
+            try:
+                self._pattern_image_cache.pop(key)
+            except KeyError:
+                pass
+        self._pattern_image_cache[key] = value
+        while len(self._pattern_image_cache) > self._pattern_cache_max:
+            self._pattern_image_cache.popitem(last=False)
+
+    def _set_canvas_image(self, image_ref):
+        self._tk_img = image_ref
+        if self._canvas_img_id is None:
+            self._canvas_img_id = self._canvas.create_image(0, 0, anchor="nw", image=image_ref)
+        else:
+            self._canvas.itemconfig(self._canvas_img_id, image=image_ref)
 
     def _bind_dock_children(self, widget):
         """Recursively bind Enter ให้ทุก child ของ dock"""
@@ -457,6 +490,12 @@ class TestScreen(ctk.CTkFrame):
         self._sequence_states = {}
         self._sequence_ui = {}
         self._hide_bottom_sequence_bar()
+        if self._canvas_img_id is not None:
+            try:
+                self._canvas.delete(self._canvas_img_id)
+            except Exception:
+                self._canvas.delete("all")
+        self._canvas_img_id = None
         self.after_idle(self.focus_set)
         self.after_idle(self._canvas.focus_set)
         self.after_idle(self._load_current_item)
@@ -506,7 +545,6 @@ class TestScreen(ctk.CTkFrame):
             state["playing"] = False
 
     def _refresh_sequence_canvas(self, item):
-        t0 = time.perf_counter()
         state = self._get_sequence_state(item)
         frame_path = state["frame_paths"][state["current_index"]]
 
@@ -520,21 +558,8 @@ class TestScreen(ctk.CTkFrame):
             pil_img = load_pattern_sequence_frame(frame_path, cw, ch)
             cached = ImageTk.PhotoImage(pil_img)
             self._seq_cache_put(cache_key, cached)
-        self._tk_img = cached
 
-        self._canvas.delete("all")
-        self._canvas.create_image(0, 0, anchor="nw", image=cached)
-
-        if self._perf_enabled:
-            print(
-                f"[PERF] TestScreen._refresh_sequence_canvas "
-                f"item={item.get('item_id')} "
-                f"ms={(time.perf_counter() - t0) * 1000:.1f}"
-            )
-
-    def warmup(self):
-        # Disabled in balanced mode (preloading all frames is too heavy).
-        return
+        self._set_canvas_image(cached)
 
     def _get_current_sequence_level(self, item) -> str:
         state = self._get_sequence_state(item)
@@ -826,17 +851,22 @@ class TestScreen(ctk.CTkFrame):
             cw = self._canvas.winfo_width()  or 1920
             ch = self._canvas.winfo_height() or 1080
 
-            pil_img = load_pattern_image(
-                display_type=session.get("display_type", "diagnostic"),
-                period=session.get("period", "monthly"),
-                item_id=item["item_id"],
-                width=cw,
-                height=ch,
-            )
-            self._tk_img = ImageTk.PhotoImage(pil_img)
+            display_type = session.get("display_type", "diagnostic")
+            period = session.get("period", "monthly")
+            cache_key = (display_type, period, item["item_id"], cw, ch)
+            cached = self._pattern_cache_get(cache_key)
+            if cached is None:
+                pil_img = load_pattern_image(
+                    display_type=display_type,
+                    period=period,
+                    item_id=item["item_id"],
+                    width=cw,
+                    height=ch,
+                )
+                cached = ImageTk.PhotoImage(pil_img)
+                self._pattern_cache_put(cache_key, cached)
 
-            self._canvas.delete("all")
-            self._canvas.create_image(0, 0, anchor="nw", image=self._tk_img)
+            self._set_canvas_image(cached)
 
         self._show_question(item)
 
