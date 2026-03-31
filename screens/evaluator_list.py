@@ -18,32 +18,37 @@ class EvaluatorListScreen(ctk.CTkFrame):
         self.back_command   = back_command
         self.edit_command   = edit_command
         self.delete_command = delete_command
-        # evaluators = [{"first": "Athiwat", "last": "Yospanya"}, ...]
         self.evaluators = evaluators or []
         self.all_evaluators = self.evaluators.copy()
         self._delete_dialog = None
         self._perf_enabled = os.environ.get("MEDICAL_PERF", "").strip() not in ("", "0", "false", "False")
         self._row_pool = []
         self._empty_row_label = None
+        self._search_after_id = None
 
-        # กางโครงสร้างแบ่งหน้าจอเป็น 3 โซน (1. Navbar บนสุดพาดขวาง 2. Sidebar ซ้าย 3. Main Content ขวา)
-        self.grid_rowconfigure(0, weight=0) # แถว 0 ล็อกความสูงพอดีตาม Navbar
-        self.grid_rowconfigure(1, weight=1) # แถว 1 ยืดเต็มจออิสระ
-        self.grid_columnconfigure(0, weight=0) # คอลัมน์ 0 ล็อกความกว้างตาม Sidebar
-        self.grid_columnconfigure(1, weight=1) # คอลัมน์ 1 ยืดพื้นที่ที่เหลืออิสระ
+        self._evaluator_password_entry = None
+        self._admin_username_entry = None
+        self._admin_password_entry = None
+        self._delete_error_label = None
 
-        # =============== NAVBAR ===============
+        # Layout
+        self.grid_rowconfigure(0, weight=0)
+        self.grid_rowconfigure(1, weight=1)
+        self.grid_columnconfigure(0, weight=0)
+        self.grid_columnconfigure(1, weight=1)
+
+        # Navbar
         self.navbar = NavBarWidget(self)
         self.navbar.grid(row=0, column=0, columnspan=2, sticky="ew")
 
         self.navbar_separator = ctk.CTkFrame(self, height=1, fg_color=("#cccccc", "#333333"))
         self.navbar_separator.grid(row=0, column=0, columnspan=2, sticky="sew")
 
-        # =============== ICON BAR ===============
+        # Sidebar
         self.sidebar = SideBarWidget(self, navigate_command=self.master.show_screen)
         self.sidebar.grid(row=1, column=0, sticky="nsew")
 
-        # =============== MAIN CONTENT ===============
+        # Main
         self.main_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.main_frame.grid(row=1, column=1, sticky="nsew")
 
@@ -54,7 +59,6 @@ class EvaluatorListScreen(ctk.CTkFrame):
         FONT_TITLE   = (FONT_TH, 28, "bold")
         FONT_HEADER  = (FONT_TH, 20, "bold")
         FONT_ROW     = (FONT_TH, 18)
-        FONT_BTN     = (FONT_TH, 20, "bold")
         FONT_ICON    = ("Segoe UI Emoji", 16)
 
         CARD_COLOR   = ("#2b2b2b", "#2b2b2b")
@@ -65,7 +69,7 @@ class EvaluatorListScreen(ctk.CTkFrame):
         TEXT_WHITE   = ("white", "white")
         TEXT_GRAY    = ("#aaaaaa", "#aaaaaa")
 
-        # ── Card ──
+        # Card
         card = ctk.CTkFrame(
             self.main_frame, corner_radius=16,
             fg_color=CARD_COLOR,
@@ -75,10 +79,10 @@ class EvaluatorListScreen(ctk.CTkFrame):
         card.grid_rowconfigure(1, weight=1)
         card.grid_columnconfigure(0, weight=1)
 
-        # ── Top row: back + title + search ──
+        # Top row
         top = ctk.CTkFrame(card, fg_color="transparent")
         top.grid(row=0, column=0, sticky="ew", padx=28, pady=(22, 12))
-        top.grid_columnconfigure(1, weight=1) # บังคับให้ชื่อเรื่องดันกล่องค้นหาไปชิดขวา
+        top.grid_columnconfigure(1, weight=1)
 
         ctk.CTkButton(
             top, text="↩", font=(FONT_TH, 20, "bold"),
@@ -104,14 +108,13 @@ class EvaluatorListScreen(ctk.CTkFrame):
         self.search_entry.grid(row=0, column=2, sticky="e")
         self.search_entry.bind("<KeyRelease>", self._on_search)
 
-        # ── Table container ──
+        # Table
         table_frame = ctk.CTkFrame(card, fg_color="transparent")
         table_frame.grid(row=1, column=0, sticky="nsew", padx=28, pady=(0, 24))
-        table_frame.grid_columnconfigure(0, weight=3)  # ชื่อ
-        table_frame.grid_columnconfigure(1, weight=3)  # นามสกุล
-        table_frame.grid_columnconfigure(2, weight=1)  # จัดการ
+        table_frame.grid_columnconfigure(0, weight=3)
+        table_frame.grid_columnconfigure(1, weight=3)
+        table_frame.grid_columnconfigure(2, weight=1)
 
-        # ── Header row ──
         header = ctk.CTkFrame(table_frame, corner_radius=10, fg_color=HEADER_COLOR)
         header.grid(row=0, column=0, columnspan=3, sticky="ew", pady=(0, 8))
         header.grid_columnconfigure(0, weight=3)
@@ -124,7 +127,6 @@ class EvaluatorListScreen(ctk.CTkFrame):
                 text_color="white", anchor="w" if col < 2 else "center",
             ).grid(row=0, column=col, padx=20, pady=12, sticky="ew")
 
-        # ── Scrollable rows ──
         self._row_container = ctk.CTkScrollableFrame(
             table_frame, fg_color="transparent",
             scrollbar_button_color=GRAY_BTN,
@@ -162,11 +164,15 @@ class EvaluatorListScreen(ctk.CTkFrame):
                 entry["last"].grid_remove()
                 entry["actions"].grid_remove()
                 entry["divider"].grid_remove()
+            if self._perf_enabled:
+                print(
+                    f"[PERF] EvaluatorListScreen._render_rows rows=0 "
+                    f"ms={(time.perf_counter() - t0) * 1000:.1f}"
+                )
             return
         else:
             self._empty_row_label.grid_remove()
 
-        # Ensure pool size
         while len(self._row_pool) < len(self.evaluators):
             first_lbl = ctk.CTkLabel(
                 self._row_container,
@@ -225,7 +231,7 @@ class EvaluatorListScreen(ctk.CTkFrame):
             )
 
         for idx, ev in enumerate(self.evaluators):
-            r = idx * 2  # แยกแถวคู่เพื่อให้มีพื้นที่แทรกเส้นคั่น
+            r = idx * 2
             entry = self._row_pool[idx]
 
             entry["first"].configure(text=ev.get("first", ""))
@@ -235,7 +241,6 @@ class EvaluatorListScreen(ctk.CTkFrame):
             entry["last"].grid(row=r, column=1, padx=20, pady=10, sticky="ew")
             entry["actions"].grid(row=r, column=2, padx=12, pady=6, sticky="e")
 
-            # ป้องกันบัคเวลาเสิร์จแล้วคิวอิงสลับ
             original_idx = self.all_evaluators.index(ev)
             entry["edit_btn"].configure(command=lambda i=original_idx: self._on_edit(i))
             entry["del_btn"].configure(command=lambda i=original_idx: self._on_delete(i))
@@ -245,14 +250,12 @@ class EvaluatorListScreen(ctk.CTkFrame):
             else:
                 entry["divider"].grid_remove()
 
-        # Hide extra pooled rows
         for j in range(len(self.evaluators), len(self._row_pool)):
             self._row_pool[j]["first"].grid_remove()
             self._row_pool[j]["last"].grid_remove()
             self._row_pool[j]["actions"].grid_remove()
             self._row_pool[j]["divider"].grid_remove()
-                
-        # สั่งให้แถวสุดท้ายว่างๆ ยืดพื้นที่ออก เพื่อดันให้ก้อนรายชื่อที่เหลืองัดลอยไปชิดบนสุดตลอดเวลา
+
         self._row_container.grid_rowconfigure(len(self.evaluators) * 2, weight=1)
 
         if self._perf_enabled:
@@ -261,18 +264,34 @@ class EvaluatorListScreen(ctk.CTkFrame):
                 f"ms={(time.perf_counter() - t0) * 1000:.1f}"
             )
 
-    # ── Public: refresh list from outside ──
+    # Public
     def set_evaluators(self, evaluators: list):
-        self.evaluators = evaluators
-        self.all_evaluators = evaluators.copy()
-        if hasattr(self, "search_var"):
-            self.search_var.set("") # ล้างช่องค้นหาทิ้งทุกครั้งที่อัปเดตข้อมูลใหม่
-        self._render_rows()
+        self.all_evaluators = list(evaluators)
+        self._apply_search(reset_if_empty=False)
 
-    def _on_search(self, event=None):
-        query = self.search_var.get().strip().lower()
+    def on_show(self, **kwargs):
+        if hasattr(self, "search_entry"):
+            self.after(0, self.search_entry.focus_set)
+
+    def on_hide(self, **kwargs):
+        self._cancel_pending_search()
+        self._close_delete_dialog()
+
+    # Search
+    def _cancel_pending_search(self):
+        if self._search_after_id is not None:
+            try:
+                self.after_cancel(self._search_after_id)
+            except Exception:
+                pass
+            self._search_after_id = None
+
+    def _apply_search(self, reset_if_empty=False):
+        query = self.search_var.get().strip().lower() if hasattr(self, "search_var") else ""
         if not query:
             self.evaluators = self.all_evaluators.copy()
+            if reset_if_empty and hasattr(self, "search_var"):
+                self.search_var.set("")
         else:
             self.evaluators = [
                 ev for ev in self.all_evaluators
@@ -280,15 +299,21 @@ class EvaluatorListScreen(ctk.CTkFrame):
             ]
         self._render_rows()
 
-    # ── Callbacks ──
+    def _on_search(self, event=None):
+        self._cancel_pending_search()
+        self._search_after_id = self.after(80, self._apply_search)
+
+    # Callbacks
     def _on_back(self):
         if self.back_command:
             self.back_command()
 
     def _on_edit(self, original_idx: int):
         ev = self.all_evaluators[original_idx]
+        if self.edit_command:
+            self.edit_command(original_idx)
+            return
         if hasattr(self.master, "show_screen"):
-            # วาร์ปไปหน้าระบุรหัสผ่านและแก้ไข แบบ Full Screen พร้อมแนบ data ของคนนี้ไปให้ด้วย
             self.master.show_screen("evaluator_edit", bypass_auth=True, evaluator_data=ev)
 
     def _on_delete(self, original_idx: int):
@@ -414,17 +439,19 @@ class EvaluatorListScreen(ctk.CTkFrame):
         ).pack(side="right")
 
         dlg.protocol("WM_DELETE_WINDOW", self._close_delete_dialog)
+        self.after(0, self._evaluator_password_entry.focus_set)
 
     def _confirm_delete(self, evaluator: dict):
         if not self.delete_command:
             return
 
-        evaluator_password = self._evaluator_password_entry.get().strip()
-        admin_username = self._admin_username_entry.get().strip()
-        admin_password = self._admin_password_entry.get().strip()
+        evaluator_password = self._evaluator_password_entry.get().strip() if self._evaluator_password_entry else ""
+        admin_username = self._admin_username_entry.get().strip() if self._admin_username_entry else ""
+        admin_password = self._admin_password_entry.get().strip() if self._admin_password_entry else ""
 
         if not evaluator_password and not (admin_username and admin_password):
-            self._delete_error_label.configure(text="กรุณากรอกรหัสผู้ประเมิน หรือ username/password ของ admin")
+            if self._delete_error_label:
+                self._delete_error_label.configure(text="กรุณากรอกรหัสผู้ประเมิน หรือ username/password ของ admin")
             return
 
         error = self.delete_command(
@@ -434,13 +461,21 @@ class EvaluatorListScreen(ctk.CTkFrame):
             admin_password=admin_password,
         )
         if error:
-            self._delete_error_label.configure(text=error)
+            if self._delete_error_label:
+                self._delete_error_label.configure(text=error)
             return
 
         self._close_delete_dialog()
 
     def _close_delete_dialog(self):
         if self._delete_dialog and self._delete_dialog.winfo_exists():
-            self._delete_dialog.grab_release()
+            try:
+                self._delete_dialog.grab_release()
+            except Exception:
+                pass
             self._delete_dialog.destroy()
         self._delete_dialog = None
+        self._evaluator_password_entry = None
+        self._admin_username_entry = None
+        self._admin_password_entry = None
+        self._delete_error_label = None
