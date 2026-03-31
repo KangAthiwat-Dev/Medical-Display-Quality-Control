@@ -44,6 +44,8 @@ class InstructionsScreen(ctk.CTkFrame):
 
         self.back_command = back_command
         self.next_command = next_command
+        self._image_refs = []
+        self._next_button = None
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
@@ -111,11 +113,12 @@ class InstructionsScreen(ctk.CTkFrame):
         cols_frame.grid(row=2, column=0, sticky="nsew", padx=24, pady=20)
         cols_frame.grid_rowconfigure(0, weight=1)
 
+        self._image_refs.clear()
         for col_i, item in enumerate(INSTRUCTIONS):
             cols_frame.grid_columnconfigure(col_i, weight=1)
             col = ctk.CTkFrame(cols_frame, fg_color="transparent")
             col.grid(row=0, column=col_i, sticky="nsew", padx=8)
-            col.grid_rowconfigure(2, weight=1)   # image row expands
+            col.grid_rowconfigure(2, weight=1)
             col.grid_columnconfigure(0, weight=1)
 
             # ── Number badge ──
@@ -123,9 +126,12 @@ class InstructionsScreen(ctk.CTkFrame):
                                  corner_radius=28, fg_color=NUM_BG)
             badge.grid(row=0, column=0, pady=(8, 12))
             badge.grid_propagate(False)
-            ctk.CTkLabel(badge, text=item["number"],
-                         font=FONT_NUMBER, text_color=NUM_FG,
-                         ).place(relx=0.5, rely=0.5, anchor="center")
+            ctk.CTkLabel(
+                badge,
+                text=item["number"],
+                font=FONT_NUMBER,
+                text_color=NUM_FG,
+            ).place(relx=0.5, rely=0.5, anchor="center")
 
             # ── Image ──
             img_frame = ctk.CTkFrame(col, fg_color="transparent")
@@ -136,7 +142,10 @@ class InstructionsScreen(ctk.CTkFrame):
                 try:
                     pil_img = Image.open(img_path).convert("RGBA")
                     ctk_img = ctk.CTkImage(pil_img, size=IMG_SIZE)
-                    ctk.CTkLabel(img_frame, image=ctk_img, text="").pack()
+                    self._image_refs.append(ctk_img)
+                    img_label = ctk.CTkLabel(img_frame, image=ctk_img, text="")
+                    img_label.image = ctk_img
+                    img_label.pack()
                 except Exception:
                     self._placeholder(img_frame, IMG_SIZE)
             else:
@@ -153,12 +162,13 @@ class InstructionsScreen(ctk.CTkFrame):
         bottom = ctk.CTkFrame(card, fg_color="transparent")
         bottom.grid(row=3, column=0, sticky="e", padx=28, pady=(8, 20))
 
-        ctk.CTkButton(
+        self._next_button = ctk.CTkButton(
             bottom, text="ถัดไป", font=FONT_BTN,
             width=160, height=46, corner_radius=23,
             fg_color=ACCENT, hover_color=ACCENT_HOVER,
             text_color="white", command=self._on_next,
-        ).pack()
+        )
+        self._next_button.pack()
 
     # ──────────────────────────────────────────────
     @staticmethod
@@ -175,6 +185,13 @@ class InstructionsScreen(ctk.CTkFrame):
         ctk.CTkLabel(ph, text="🖼", font=("Segoe UI Emoji", 48),
                      text_color=("#666666", "#666666")).place(
             relx=0.5, rely=0.5, anchor="center")
+
+    def on_show(self, **kwargs):
+        if self._next_button is not None:
+            self.after(0, self._next_button.focus_set)
+
+    def on_hide(self, **kwargs):
+        pass
 
     # ── Callbacks ──
     def _on_back(self):
