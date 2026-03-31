@@ -28,11 +28,18 @@ class CriteriaScreen(ctk.CTkFrame):
         self.period = ""
         self.rows = []
 
+        self._ui_built = False
+        self._body = None
+        self._table_entries = []
+        self._empty_label = None
+
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
         self.main_frame = ctk.CTkFrame(self, fg_color=TRANSPARENT)
         self.main_frame.grid(row=0, column=0, sticky="nsew")
+
+        self._build_ui()
 
     def on_show(self, display_type="", period="", **kwargs):
         if display_type:
@@ -41,10 +48,8 @@ class CriteriaScreen(ctk.CTkFrame):
             self.period = period
 
         self.rows = self._build_rows()
-
-        for widget in self.main_frame.winfo_children():
-            widget.destroy()
         self._build_ui()
+        self._update_view()
 
     def _build_rows(self):
         groups = TEST_CONFIG.get(self.display_type, {}).get(self.period, [])
@@ -67,12 +72,13 @@ class CriteriaScreen(ctk.CTkFrame):
         return rows
 
     def _build_ui(self):
+        if self._ui_built:
+            return
+
         FONT_TH = "TH Sarabun New"
         FONT_TITLE = (FONT_TH, 30, "bold")
         FONT_HEADER = (FONT_TH, 20, "bold")
-        FONT_SECTION = (FONT_TH, 18, "bold")
         FONT_ITEM = (FONT_TH, 17, "bold")
-        FONT_BODY = (FONT_TH, 16, "bold")
 
         card = ctk.CTkFrame(self.main_frame, corner_radius=16, fg_color=HISTORY_CARD_COLOR)
         card.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.92, relheight=0.92)
@@ -136,47 +142,184 @@ class CriteriaScreen(ctk.CTkFrame):
         body.grid_columnconfigure(0, weight=1)
         body.grid_columnconfigure(1, weight=1)
         body.grid_anchor("nw")
+        self._body = body
 
-        r = 0
-        for section in self.rows:
-            ctk.CTkLabel(
-                body,
-                text=section.get("section_title", ""),
+        self._empty_label = ctk.CTkLabel(
+            body,
+            text="ยังไม่มีข้อมูลเกณฑ์การประเมิน",
+            font=FONT_ITEM,
+            text_color=CONTENT_TEXT,
+            anchor="w",
+            justify="left",
+        )
+        self._empty_label.grid(row=0, column=0, columnspan=2, sticky="w", padx=18, pady=(16, 12))
+        self._empty_label.grid_remove()
+
+        self._ui_built = True
+
+    def _flatten_rows(self):
+        entries = []
+        for section in self.rows or []:
+            entries.append(
+                (
+                    "section",
+                    {
+                        "title": section.get("section_title", ""),
+                    },
+                )
+            )
+            items = section.get("items", []) or []
+            for idx, item in enumerate(items):
+                entries.append(
+                    (
+                        "item",
+                        {
+                            "left_text": f"{item.get('title', '')}\nเกณฑ์: {item.get('criterion', '')}",
+                            "right_text": item.get("fix_guide", ""),
+                            "show_divider": idx != len(items) - 1,
+                        },
+                    )
+                )
+        return entries
+
+    def _ensure_table_entry(self, kind: str, idx: int):
+        if self._body is None:
+            return None
+
+        while len(self._table_entries) <= idx:
+            self._table_entries.append(None)
+
+        current = self._table_entries[idx]
+        if current is not None and current.get("kind") == kind:
+            return current
+
+        if current:
+            for widget in current.get("widgets", []):
+                widget.destroy()
+
+        FONT_TH = "TH Sarabun New"
+        FONT_SECTION = (FONT_TH, 18, "bold")
+        FONT_ITEM = (FONT_TH, 17, "bold")
+        FONT_BODY = (FONT_TH, 16, "bold")
+
+        if kind == "section":
+            title_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
                 font=FONT_SECTION,
                 text_color=SECTION_BLUE,
                 anchor="w",
                 justify="left",
                 wraplength=780,
-            ).grid(row=r, column=0, columnspan=2, sticky="w", padx=18, pady=(12, 8))
-            r += 1
+            )
+            entry = {
+                "kind": "section",
+                "title": title_lbl,
+                "widgets": [title_lbl],
+            }
+        else:
+            left_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
+                font=FONT_ITEM,
+                text_color=CONTENT_TEXT,
+                anchor="nw",
+                justify="left",
+                wraplength=430,
+            )
+            right_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
+                font=FONT_BODY,
+                text_color=CONTENT_TEXT,
+                anchor="nw",
+                justify="left",
+                wraplength=430,
+            )
+            divider = ctk.CTkFrame(self._body, height=1, fg_color=CONTENT_LINE)
+            entry = {
+                "kind": "item",
+                "left": left_lbl,
+                "right": right_lbl,
+                "divider": divider,
+                "widgets": [left_lbl, right_lbl, divider],
+            }
 
-            for idx, item in enumerate(section.get("items", [])):
-                left_text = f"{item.get('title', '')}\nเกณฑ์: {item.get('criterion', '')}"
-                ctk.CTkLabel(
-                    body,
-                    text=left_text,
-                    font=FONT_ITEM,
-                    text_color=CONTENT_TEXT,
-                    anchor="nw",
-                    justify="left",
-                    wraplength=430,
-                ).grid(row=r, column=0, sticky="nsew", padx=(18, 12), pady=(4, 12))
+        self._table_entries[idx] = entry
+        return entry
 
-                ctk.CTkLabel(
-                    body,
-                    text=item.get("fix_guide", ""),
-                    font=FONT_BODY,
-                    text_color=CONTENT_TEXT,
-                    anchor="nw",
-                    justify="left",
-                    wraplength=430,
-                ).grid(row=r, column=1, sticky="nsew", padx=(12, 18), pady=(4, 12))
-                r += 1
+    def _update_view(self):
+        if not self._ui_built or self._body is None:
+            return
 
-                if idx != len(section.get("items", [])) - 1:
-                    ctk.CTkFrame(body, width=1, fg_color=CONTENT_LINE).grid(
-                        row=r - 1, column=0, rowspan=1, sticky="nse", padx=(0, 0)
+        entries = self._flatten_rows()
+        if not entries:
+            self._empty_label.grid()
+            for entry in self._table_entries:
+                if not entry:
+                    continue
+                for widget in entry.get("widgets", []):
+                    widget.grid_remove()
+            self.after(0, lambda: self._body._parent_canvas.yview_moveto(0))
+            return
+
+        self._empty_label.grid_remove()
+
+        row_index = 0
+        for idx, (kind, data) in enumerate(entries):
+            entry = self._ensure_table_entry(kind, idx)
+            if kind == "section":
+                entry["title"].configure(text=data.get("title", ""))
+                entry["title"].grid(
+                    row=row_index,
+                    column=0,
+                    columnspan=2,
+                    sticky="w",
+                    padx=18,
+                    pady=(12, 8),
+                )
+                row_index += 1
+            else:
+                entry["left"].configure(text=data.get("left_text", ""))
+                entry["right"].configure(text=data.get("right_text", ""))
+
+                entry["left"].grid(
+                    row=row_index,
+                    column=0,
+                    sticky="nsew",
+                    padx=(18, 12),
+                    pady=(4, 12),
+                )
+                entry["right"].grid(
+                    row=row_index,
+                    column=1,
+                    sticky="nsew",
+                    padx=(12, 18),
+                    pady=(4, 12),
+                )
+
+                if data.get("show_divider"):
+                    entry["divider"].grid(
+                        row=row_index + 1,
+                        column=0,
+                        columnspan=2,
+                        sticky="ew",
+                        padx=18,
+                        pady=(0, 0),
                     )
+                else:
+                    entry["divider"].grid_remove()
+
+                row_index += 2
+
+        for idx in range(len(entries), len(self._table_entries)):
+            entry = self._table_entries[idx]
+            if not entry:
+                continue
+            for widget in entry.get("widgets", []):
+                widget.grid_remove()
+
+        self.after(0, lambda: self._body._parent_canvas.yview_moveto(0))
 
     def _on_back(self):
         if self.back_command:
