@@ -1,6 +1,7 @@
 import os
-from collections import OrderedDict
 import tkinter as tk
+from collections import OrderedDict
+
 import customtkinter as ctk
 from PIL import ImageTk
 
@@ -85,6 +86,9 @@ class TestScreen(ctk.CTkFrame):
         self._sequence_states = {}
         self._sequence_after_id = None
         self._sequence_ui = {}
+        self._current_dialog_item = None
+        self._dialog_mode = None
+        self._canvas_img_id = None
 
         # ── Canvas สำหรับแสดง pattern ──
         self._canvas = tk.Canvas(self, bg="black", highlightthickness=0)
@@ -96,14 +100,18 @@ class TestScreen(ctk.CTkFrame):
         self._dock_visible = False
 
         self._cache_target_size = (1920, 1080)
+
         self._seq_cache_max_frames = self._env_int(
             "MEDICAL_CACHE_SEQ_FRAMES", 128, min_value=0, max_value=5000
         )
         self._sequence_image_cache = OrderedDict()  # (frame_path, w, h) -> ImageTk.PhotoImage
+
         self._pattern_cache_max = self._env_int(
             "MEDICAL_CACHE_PATTERNS", 64, min_value=0, max_value=5000
         )
-        self._pattern_image_cache = OrderedDict()  # (display_type, period, item_id, w, h) -> ImageTk.PhotoImage
+        self._pattern_image_cache = OrderedDict()   # (display_type, period, item_id, w, h) -> ImageTk.PhotoImage
+
+        self._canvas_img_id = None
 
         # Bind hover events
         self.bind("<Motion>", self._handle_mouse_motion, add="+")
@@ -490,15 +498,10 @@ class TestScreen(ctk.CTkFrame):
         self._sequence_states = {}
         self._sequence_ui = {}
         self._hide_bottom_sequence_bar()
-        if self._canvas_img_id is not None:
-            try:
-                self._canvas.delete(self._canvas_img_id)
-            except Exception:
-                self._canvas.delete("all")
-        self._canvas_img_id = None
         self.after_idle(self.focus_set)
         self.after_idle(self._canvas.focus_set)
         self.after_idle(self._load_current_item)
+        self._canvas_img_id = None
 
     def on_hide(self, **kw):
         self._stop_sequence_playback()
@@ -879,197 +882,307 @@ class TestScreen(ctk.CTkFrame):
             self._show_sequence_question(item)
             return
 
-        self._sequence_ui = {}
         self._hide_bottom_sequence_bar()
-        if self._card_win is None or not self._card_win.winfo_exists():
-            self._build_card_window()
+        self._build_card_window()
 
-        win = self._card_win
+        self._current_dialog_item = item
+        self._dialog_mode = "question"
+        self._sequence_ui = {}
+        self._set_dialog_header(item)
+        self._show_dialog_mode("question")
 
-        # Clear
-        for w in self._body_frame.winfo_children():
-            w.destroy()
-        for w in self._footer_frame.winfo_children():
-            w.destroy()
-
-        # Reset state — ไม่ default เลือกอะไร
-        self._answer_var = ctk.StringVar(value="")
-        self._note_var = ctk.StringVar(value="")
+        self._answer_var.set("")
+        self._note_var.set("")
         self._channel_vars = {}
-        self._error_label = None
+        self._error_label = self._normal_error_label
+        self._normal_error_label.configure(text="")
 
-        # ── Restore previous answer ──
-        prev_ans = self._answers.get(item.get("item_id"))
+        prev_ans = self._answers.get(item.get("item_id")) or {}
         if prev_ans:
             self._answer_var.set("yes" if prev_ans.get("result") == "pass" else "no")
             self._note_var.set(prev_ans.get("note", ""))
 
-        # ═══ Body ═══
+        total_ch = item.get("total_channels", 0)
+        self._build_channel_checkboxes(total_ch, prev_ans)
+        self._on_answer_change()
 
-        # ── Title row: ชื่อ (blue) + badge + ปุ่มปิด ──
-        title_row = ctk.CTkFrame(self._body_frame, fg_color="transparent")
-        title_row.pack(fill="x", padx=15, pady=(12, 5))
+        btn_text = NEXT_BUTTON_TEXT if self._idx < len(self._items) - 1 else SUMMARY_BUTTON_TEXT
+        self._footer_next_btn.configure(text=btn_text, command=self._submit_current_question)
+        self._footer_prev_btn.configure(command=self._go_previous)
+        self._update_footer_buttons(show_prev=self._idx > 0, primary="next")
 
-        title_text = item.get("title", "")
-        if ")" in title_text:
-            title_display = title_text.split(")", 1)[-1].strip()
+        self._show_card_window()
+
+    def _show_sequence_question(self, item):
+        self._build_card_window()
+
+        self._current_dialog_item = item
+        self._dialog_mode = "sequence"
+        self._set_dialog_header(item)
+
+        state = self._get_sequence_state(item)
+
+        if not state["started"]:
+            instruction = item.get("instruction", {})
+            instruction_title = instruction.get("instruction_title") or self._extract_title_display(item.get("title", ""))
+            instruction_text = instruction.get("instruction_text") or SEQUENCE_PLAYER_HELP_TEXT
+
+            self._sequence_instruction_title_label.configure(text=instruction_title)
+            self._sequence_instruction_text_label.configure(text=instruction_text)
+            self._sequence_start_error_label.configure(text="")
+            self._sequence_ui = {"error_label": self._sequence_start_error_label}
+
+            self._show_dialog_mode("sequence_intro")
+            self._footer_prev_btn.configure(command=self._go_previous)
+            self._footer_start_btn.configure(command=self._start_current_sequence)
+            self._update_footer_buttons(show_prev=self._idx > 0, primary="start")
         else:
-            title_display = title_text
+            self._sequence_started_error_label.configure(text="")
+            self._sequence_player_seek_slider.configure(
+                from_=0,
+                to=max(len(state["frame_paths"]) - 1, 0),
+                number_of_steps=max(len(state["frame_paths"]) - 1, 1),
+                command=self._handle_sequence_seek_from_dialog,
+            )
+            self._sequence_player_speed_control.configure(command=self._handle_sequence_speed_from_dialog)
+            self._sequence_player_prev_btn.configure(command=self._handle_sequence_prev_from_dialog)
+            self._sequence_player_play_btn.configure(command=self._handle_sequence_play_toggle_from_dialog)
+            self._sequence_player_replay_btn.configure(command=self._handle_sequence_replay_from_dialog)
+            self._sequence_player_next_btn.configure(command=self._handle_sequence_next_from_dialog)
+            self._sequence_player_mark_btn.configure(command=self._handle_sequence_mark_from_dialog)
 
-        ctk.CTkLabel(title_row, text=title_display,
-                     font=("TH Sarabun New", 22, "bold"),
-                     text_color="#4A90D9",
-                     wraplength=380,
-                     justify="left").pack(side="left", fill="x", expand=True)
+            self._sequence_ui = self._sequence_player_ui
+            self._bind_sequence_shortcuts(item)
+            self._show_dialog_mode("sequence_player")
+            self._footer_prev_btn.configure(command=self._go_previous)
+            self._footer_summary_btn.configure(command=self._submit_current_sequence_summary)
+            self._update_footer_buttons(show_prev=self._idx > 0, primary="summary")
+            self._update_sequence_ui(item)
 
-        # Badge
-        counter = f"{self._idx + 1}/{len(self._items)}"
-        ctk.CTkLabel(title_row, text=counter,
-                     font=("TH Sarabun New", 16, "bold"),
-                     fg_color="#4A90D9", text_color="white",
-                     corner_radius=14, width=50, height=30).pack(side="right", padx=(5, 0))
+        self._show_card_window()
 
-        # ปุ่มซ่อน dialog (─)
-        ctk.CTkButton(title_row, text="─",
-                      font=("TH Sarabun New", 16, "bold"),
-                      width=30, height=30, corner_radius=15,
-                      fg_color="#555555", hover_color="#777777",
-                      text_color="white",
-                      command=self._toggle_dialog
-                      ).pack(side="right", padx=(5, 0))
+    def _extract_title_display(self, title_text: str) -> str:
+        if ")" in title_text:
+            return title_text.split(")", 1)[-1].strip()
+        return title_text
 
-        # ── เกณฑ์ ──
+    def _set_dialog_header(self, item):
+        title_text = item.get("title", "")
+        title_display = self._extract_title_display(title_text)
+        self._dialog_title_label.configure(text=title_display)
+        self._dialog_counter_label.configure(text=f"{self._idx + 1}/{len(self._items)}")
+
         criterion = item.get("pass_criterion", "")
         if criterion:
             item_num = title_text.split(")")[0] + ")" if ")" in title_text else ""
             display_criterion = f"{item_num} {criterion}" if item_num else criterion
-            ctk.CTkLabel(self._body_frame, text=display_criterion,
-                         font=("TH Sarabun New", 17),
-                         text_color="#CCCCCC",
-                         wraplength=480,
-                         justify="center").pack(padx=20, pady=(0, 10))
+            self._dialog_criterion_label.configure(text=display_criterion)
+            self._dialog_criterion_label.pack(padx=20, pady=(0, 10))
+        else:
+            self._dialog_criterion_label.pack_forget()
 
-        # ── Radio: ใช่ / ไม่ใช่ ──
-        radio_frame = ctk.CTkFrame(self._body_frame, fg_color="transparent")
-        radio_frame.pack(pady=(5, 10))
+    def _show_dialog_mode(self, mode: str):
+        self._normal_frame.pack_forget()
+        self._sequence_intro_frame.pack_forget()
+        self._sequence_player_frame.pack_forget()
 
-        ctk.CTkRadioButton(radio_frame, text=ANSWER_YES_TEXT,
-                           font=("TH Sarabun New", 20),
-                           variable=self._answer_var, value="yes",
-                           text_color="#CCCCCC",
-                           fg_color="#4A90D9",
-                           hover_color="#3A7BC8",
-                           command=lambda: self._on_answer_change(item)
-                           ).pack(side="left", padx=(0, 40))
+        if mode == "question":
+            self._normal_frame.pack(fill="x", padx=0, pady=(0, 0))
+        elif mode == "sequence_intro":
+            self._sequence_intro_frame.pack(fill="x", padx=0, pady=(0, 0))
+        elif mode == "sequence_player":
+            self._sequence_player_frame.pack(fill="x", padx=0, pady=(0, 0))
 
-        ctk.CTkRadioButton(radio_frame, text=ANSWER_NO_TEXT,
-                           font=("TH Sarabun New", 20),
-                           variable=self._answer_var, value="no",
-                           text_color="#CCCCCC",
-                           fg_color="#4A90D9",
-                           hover_color="#3A7BC8",
-                           command=lambda: self._on_answer_change(item)
-                           ).pack(side="left")
+        self._reset_dialog_scroll()
 
-        # ── Channel checkboxes container (ซ่อนไว้ก่อน) ──
-        total_ch = item.get("total_channels", 0)
-        self._channels_container = ctk.CTkFrame(self._body_frame, fg_color="transparent")
-        if total_ch > 0:
-            self._build_channel_checkboxes(self._channels_container, total_ch, prev_ans)
+    def _reset_dialog_scroll(self):
+        try:
+            self._body_frame._parent_canvas.yview_moveto(0)
+        except Exception:
+            pass
 
-        # ── หมายเหตุ ──
-        self._note_frame = ctk.CTkFrame(self._body_frame, fg_color="transparent")
-        self._note_frame.pack(fill="x", padx=20, pady=(5, 5))
+    def _update_footer_buttons(self, *, show_prev: bool, primary: str):
+        for btn in (self._footer_prev_btn, self._footer_next_btn, self._footer_start_btn, self._footer_summary_btn):
+            btn.pack_forget()
 
-        ctk.CTkLabel(self._note_frame, text=NOTE_LABEL_TEXT,
-                     font=("TH Sarabun New", 17),
-                     text_color="#AAAAAA").pack(side="left", padx=(0, 10))
+        if primary == "next":
+            self._footer_next_btn.pack(side="right", padx=(10, 20), pady=10)
+        elif primary == "start":
+            self._footer_start_btn.pack(side="right", padx=(10, 20), pady=10)
+        elif primary == "summary":
+            self._footer_summary_btn.pack(side="right", padx=(10, 20), pady=10)
 
-        ctk.CTkEntry(self._note_frame,
-                     textvariable=self._note_var,
-                     font=("TH Sarabun New", 16),
-                     height=35,
-                     fg_color="#3a3a3a",
-                     border_color="#555555",
-                     text_color="white").pack(side="left", expand=True, fill="x")
+        if show_prev:
+            self._footer_prev_btn.pack(side="right", pady=10)
 
-        # ── Error label (ซ่อนไว้ก่อน) ──
-        self._error_label = ctk.CTkLabel(self._body_frame, text="",
-                                          font=("TH Sarabun New", 16),
-                                          text_color="#FF5555")
-        self._error_label.pack(pady=(2, 0))
-
-        # Show checkboxes if previous answer was "no"
-        self._on_answer_change(item)
-
-        # ═══ Footer ═══
-
-        btn_text = NEXT_BUTTON_TEXT if self._idx < len(self._items) - 1 else SUMMARY_BUTTON_TEXT
-        ctk.CTkButton(self._footer_frame, text=btn_text,
-                      font=("TH Sarabun New", 20, "bold"),
-                      fg_color="#4A90D9", hover_color="#3A7BC8",
-                      height=42, width=120, corner_radius=20,
-                      command=lambda: self._try_submit(item)
-                      ).pack(side="right", padx=(10, 20), pady=10)
-
-        if self._idx > 0:
-            ctk.CTkButton(self._footer_frame, text=PREVIOUS_BUTTON_TEXT,
-                          font=("TH Sarabun New", 20, "bold"),
-                          fg_color="transparent",
-                          hover_color="#3a3a3a",
-                          border_width=2,
-                          border_color="#888888",
-                          text_color="#CCCCCC",
-                          height=42, width=120, corner_radius=20,
-                          command=self._go_previous
-                          ).pack(side="right", pady=10)
-
+    def _show_card_window(self):
+        win = self._card_win
+        if win is None or not win.winfo_exists():
+            return
         win.deiconify()
         win.lift()
         win.focus_force()
 
-    def _show_sequence_question(self, item):
-        if self._card_win is None or not self._card_win.winfo_exists():
-            self._build_card_window()
+    def _submit_current_question(self):
+        item = self._current_dialog_item
+        if item is not None:
+            self._try_submit(item)
 
+    def _start_current_sequence(self):
+        item = self._current_dialog_item
+        if item is not None and self._is_sequence_item(item):
+            self._start_sequence_playback(item)
+
+    def _submit_current_sequence_summary(self):
+        item = self._current_dialog_item
+        if item is not None and self._is_sequence_item(item):
+            self._submit_sequence_summary(item)
+
+    def _get_current_sequence_dialog_item(self):
+        item = self._current_dialog_item
+        if item is not None and self._is_sequence_item(item):
+            return item
+        return None
+
+    def _handle_sequence_seek_from_dialog(self, value):
+        item = self._get_current_sequence_dialog_item()
+        if item is not None:
+            self._seek_sequence_frame(item, value)
+
+    def _handle_sequence_prev_from_dialog(self):
+        item = self._get_current_sequence_dialog_item()
+        if item is not None:
+            self._move_sequence_frame(item, -1)
+
+    def _handle_sequence_next_from_dialog(self):
+        item = self._get_current_sequence_dialog_item()
+        if item is not None:
+            self._move_sequence_frame(item, 1)
+
+    def _handle_sequence_play_toggle_from_dialog(self):
+        item = self._get_current_sequence_dialog_item()
+        if item is not None:
+            self._toggle_sequence_playback(item)
+
+    def _handle_sequence_replay_from_dialog(self):
+        item = self._get_current_sequence_dialog_item()
+        if item is not None:
+            self._restart_sequence(item)
+
+    def _handle_sequence_mark_from_dialog(self):
+        item = self._get_current_sequence_dialog_item()
+        if item is not None:
+            self._toggle_sequence_fail(item)
+
+    def _handle_sequence_speed_from_dialog(self, speed_label):
+        item = self._get_current_sequence_dialog_item()
+        if item is not None:
+            self._set_sequence_speed(item, speed_label)
+
+    def _build_channel_checkboxes(self, total, prev_ans=None):
+        for child in self._channels_container.winfo_children():
+            child.destroy()
+
+        self._channel_vars = {}
+        if total <= 0:
+            return
+
+        ctk.CTkLabel(
+            self._channels_container,
+            text=INVISIBLE_CHANNELS_TEXT,
+            font=("TH Sarabun New", 17, "bold"),
+            text_color="#AAAAAA",
+        ).pack(anchor="w", padx=5, pady=(5, 5))
+
+        prev_channels = set()
+        if prev_ans and "invisible_channels" in prev_ans:
+            prev_channels = set(prev_ans["invisible_channels"])
+
+        cols = 9
+        row_frame = None
+        for i in range(1, total + 1):
+            if (i - 1) % cols == 0:
+                row_frame = ctk.CTkFrame(self._channels_container, fg_color="transparent")
+                row_frame.pack(fill="x", padx=5, pady=1)
+
+            var = ctk.BooleanVar(value=(i in prev_channels))
+            self._channel_vars[i] = var
+
+            ctk.CTkCheckBox(
+                row_frame,
+                text=str(i),
+                font=("TH Sarabun New", 15),
+                variable=var,
+                width=45,
+                height=28,
+                checkbox_width=20,
+                checkbox_height=20,
+                fg_color="#666666",
+                hover_color="#888888",
+                text_color="#CCCCCC",
+                corner_radius=4,
+            ).pack(side="left", padx=2)
+
+    def _on_answer_change(self, item=None):
+        if self._error_label:
+            self._error_label.configure(text="")
+
+        if self._answer_var.get() == "no" and self._channel_vars:
+            self._channels_container.pack(fill="x", padx=20, pady=(0, 5), before=self._note_frame)
+        else:
+            self._channels_container.pack_forget()
+
+    def _build_card_window(self):
+        if self._card_win is not None and self._card_win.winfo_exists():
+            return
+
+        self._card_win = ctk.CTkToplevel(self)
         win = self._card_win
-        for w in self._body_frame.winfo_children():
-            w.destroy()
-        for w in self._footer_frame.winfo_children():
-            w.destroy()
+        win.title("")
+        win.attributes("-topmost", True)
+        win.resizable(False, False)
 
-        self._sequence_ui = {}
-        state = self._get_sequence_state(item)
+        card_w, card_h = 540, 440
+        sw = self.winfo_screenwidth()
+        sh = self.winfo_screenheight()
+        x = (sw - card_w) // 2
+        y = (sh - card_h) // 2
+        win.geometry(f"{card_w}x{card_h}+{x}+{y}")
+        win.configure(fg_color="#2a2a2a")
+        win.protocol("WM_DELETE_WINDOW", lambda: None)
+
+        self._answer_var = ctk.StringVar(value="")
+        self._note_var = ctk.StringVar(value="")
+        self._current_dialog_item = None
+        self._dialog_mode = None
+
+        self._body_frame = ctk.CTkScrollableFrame(win, fg_color="transparent")
+        self._body_frame.pack(fill="both", expand=True)
 
         title_row = ctk.CTkFrame(self._body_frame, fg_color="transparent")
         title_row.pack(fill="x", padx=15, pady=(12, 5))
 
-        title_text = item.get("title", "")
-        if ")" in title_text:
-            title_display = title_text.split(")", 1)[-1].strip()
-        else:
-            title_display = title_text
-
-        ctk.CTkLabel(
+        self._dialog_title_label = ctk.CTkLabel(
             title_row,
-            text=title_display,
+            text="",
             font=("TH Sarabun New", 22, "bold"),
             text_color="#4A90D9",
             wraplength=380,
             justify="left",
-        ).pack(side="left", fill="x", expand=True)
+        )
+        self._dialog_title_label.pack(side="left", fill="x", expand=True)
 
-        counter = f"{self._idx + 1}/{len(self._items)}"
-        ctk.CTkLabel(
+        self._dialog_counter_label = ctk.CTkLabel(
             title_row,
-            text=counter,
+            text="",
             font=("TH Sarabun New", 16, "bold"),
             fg_color="#4A90D9",
             text_color="white",
             corner_radius=14,
             width=50,
             height=30,
-        ).pack(side="right", padx=(5, 0))
+        )
+        self._dialog_counter_label.pack(side="right", padx=(5, 0))
 
         ctk.CTkButton(
             title_row,
@@ -1084,371 +1197,345 @@ class TestScreen(ctk.CTkFrame):
             command=self._toggle_dialog,
         ).pack(side="right", padx=(5, 0))
 
-        criterion = item.get("pass_criterion", "")
-        if criterion:
-            item_num = title_text.split(")")[0] + ")" if ")" in title_text else ""
-            display_criterion = f"{item_num} {criterion}" if item_num else criterion
-            ctk.CTkLabel(
-                self._body_frame,
-                text=display_criterion,
-                font=("TH Sarabun New", 17),
-                text_color="#CCCCCC",
-                wraplength=480,
-                justify="center",
-            ).pack(padx=20, pady=(0, 10))
+        self._dialog_criterion_label = ctk.CTkLabel(
+            self._body_frame,
+            text="",
+            font=("TH Sarabun New", 17),
+            text_color="#CCCCCC",
+            wraplength=480,
+            justify="center",
+        )
 
-        if not state["started"]:
-            instruction = item.get("instruction", {})
-            instruction_title = instruction.get("instruction_title") or title_display
-            instruction_text = instruction.get("instruction_text") or SEQUENCE_PLAYER_HELP_TEXT
+        self._normal_frame = ctk.CTkFrame(self._body_frame, fg_color="transparent")
 
-            ctk.CTkLabel(
-                self._body_frame,
-                text=instruction_title,
-                font=("TH Sarabun New", 26, "bold"),
-                text_color="#F2F2F2",
-                wraplength=480,
-                justify="left",
-            ).pack(anchor="w", padx=20, pady=(10, 12))
+        radio_frame = ctk.CTkFrame(self._normal_frame, fg_color="transparent")
+        radio_frame.pack(pady=(5, 10))
 
-            ctk.CTkLabel(
-                self._body_frame,
-                text=instruction_text,
-                font=("TH Sarabun New", 18),
-                text_color="#D5D5D5",
-                wraplength=480,
-                justify="left",
-            ).pack(anchor="w", padx=20, pady=(0, 16))
+        ctk.CTkRadioButton(
+            radio_frame,
+            text=ANSWER_YES_TEXT,
+            font=("TH Sarabun New", 20),
+            variable=self._answer_var,
+            value="yes",
+            text_color="#CCCCCC",
+            fg_color="#4A90D9",
+            hover_color="#3A7BC8",
+            command=self._on_answer_change,
+        ).pack(side="left", padx=(0, 40))
 
-            error_label = ctk.CTkLabel(
-                self._body_frame,
-                text="",
-                font=("TH Sarabun New", 16),
-                text_color="#FF5555",
-            )
-            error_label.pack(pady=(4, 0))
+        ctk.CTkRadioButton(
+            radio_frame,
+            text=ANSWER_NO_TEXT,
+            font=("TH Sarabun New", 20),
+            variable=self._answer_var,
+            value="no",
+            text_color="#CCCCCC",
+            fg_color="#4A90D9",
+            hover_color="#3A7BC8",
+            command=self._on_answer_change,
+        ).pack(side="left")
 
-            self._sequence_ui["error_label"] = error_label
+        self._channels_container = ctk.CTkFrame(self._normal_frame, fg_color="transparent")
 
-            ctk.CTkButton(
-                self._footer_frame,
-                text=START_BUTTON_TEXT,
-                font=("TH Sarabun New", 20, "bold"),
-                fg_color="#4A90D9",
-                hover_color="#3A7BC8",
-                height=42,
-                width=120,
-                corner_radius=20,
-                command=lambda: self._start_sequence_playback(item),
-            ).pack(side="right", padx=(10, 20), pady=10)
+        self._note_frame = ctk.CTkFrame(self._normal_frame, fg_color="transparent")
+        self._note_frame.pack(fill="x", padx=20, pady=(5, 5))
 
-            if self._idx > 0:
-                ctk.CTkButton(
-                    self._footer_frame,
-                    text=PREVIOUS_BUTTON_TEXT,
-                    font=("TH Sarabun New", 20, "bold"),
-                    fg_color="transparent",
-                    hover_color="#3a3a3a",
-                    border_width=2,
-                    border_color="#888888",
-                    text_color="#CCCCCC",
-                    height=42,
-                    width=120,
-                    corner_radius=20,
-                    command=self._go_previous,
-                ).pack(side="right", pady=10)
-        else:
-            help_label = ctk.CTkLabel(
-                self._body_frame,
-                text=SEQUENCE_PLAYER_HELP_TEXT,
-                font=("TH Sarabun New", 16),
-                text_color="#BBBBBB",
-                wraplength=480,
-                justify="center",
-            )
-            help_label.pack(padx=20, pady=(0, 8))
+        ctk.CTkLabel(
+            self._note_frame,
+            text=NOTE_LABEL_TEXT,
+            font=("TH Sarabun New", 17),
+            text_color="#AAAAAA",
+        ).pack(side="left", padx=(0, 10))
 
-            shortcut_label = ctk.CTkLabel(
-                self._body_frame,
-                text=SEQUENCE_SHORTCUT_HELP_TEXT,
-                font=("TH Sarabun New", 15),
-                text_color="#9A9A9A",
-                wraplength=480,
-                justify="center",
-            )
-            shortcut_label.pack(padx=20, pady=(0, 8))
+        ctk.CTkEntry(
+            self._note_frame,
+            textvariable=self._note_var,
+            font=("TH Sarabun New", 16),
+            height=35,
+            fg_color="#3a3a3a",
+            border_color="#555555",
+            text_color="white",
+        ).pack(side="left", expand=True, fill="x")
 
-            level_label = ctk.CTkLabel(
-                self._body_frame,
-                text="",
-                font=("TH Sarabun New", 22, "bold"),
-                text_color="#F2F2F2",
-            )
-            level_label.pack(pady=(6, 2))
+        self._normal_error_label = ctk.CTkLabel(
+            self._normal_frame,
+            text="",
+            font=("TH Sarabun New", 16),
+            text_color="#FF5555",
+        )
+        self._normal_error_label.pack(pady=(2, 0))
 
-            status_label = ctk.CTkLabel(
-                self._body_frame,
-                text="",
-                font=("TH Sarabun New", 17),
-                text_color="#AAAAAA",
-            )
-            status_label.pack(pady=(0, 12))
+        self._sequence_intro_frame = ctk.CTkFrame(self._body_frame, fg_color="transparent")
+        self._sequence_instruction_title_label = ctk.CTkLabel(
+            self._sequence_intro_frame,
+            text="",
+            font=("TH Sarabun New", 26, "bold"),
+            text_color="#F2F2F2",
+            wraplength=480,
+            justify="left",
+        )
+        self._sequence_instruction_title_label.pack(anchor="w", padx=20, pady=(10, 12))
 
-            seek_label = ctk.CTkLabel(
-                self._body_frame,
-                text="",
-                font=("TH Sarabun New", 16, "bold"),
-                text_color="#CCCCCC",
-            )
-            seek_label.pack(padx=20, pady=(0, 4))
+        self._sequence_instruction_text_label = ctk.CTkLabel(
+            self._sequence_intro_frame,
+            text="",
+            font=("TH Sarabun New", 18),
+            text_color="#D5D5D5",
+            wraplength=480,
+            justify="left",
+        )
+        self._sequence_instruction_text_label.pack(anchor="w", padx=20, pady=(0, 16))
 
-            seek_slider = ctk.CTkSlider(
-                self._body_frame,
-                from_=0,
-                to=max(len(state["frame_paths"]) - 1, 0),
-                number_of_steps=max(len(state["frame_paths"]) - 1, 1),
-                command=lambda value: self._seek_sequence_frame(item, value),
-            )
-            seek_slider.pack(fill="x", padx=20, pady=(0, 12))
+        self._sequence_start_error_label = ctk.CTkLabel(
+            self._sequence_intro_frame,
+            text="",
+            font=("TH Sarabun New", 16),
+            text_color="#FF5555",
+        )
+        self._sequence_start_error_label.pack(pady=(4, 0))
 
-            speed_row = ctk.CTkFrame(self._body_frame, fg_color="transparent")
-            speed_row.pack(fill="x", padx=20, pady=(0, 12))
+        self._sequence_player_frame = ctk.CTkFrame(self._body_frame, fg_color="transparent")
 
-            speed_label = ctk.CTkLabel(
-                speed_row,
-                text="",
-                font=("TH Sarabun New", 16, "bold"),
-                text_color="#CCCCCC",
-            )
-            speed_label.pack(side="left")
+        ctk.CTkLabel(
+            self._sequence_player_frame,
+            text=SEQUENCE_PLAYER_HELP_TEXT,
+            font=("TH Sarabun New", 16),
+            text_color="#BBBBBB",
+            wraplength=480,
+            justify="center",
+        ).pack(padx=20, pady=(0, 8))
 
-            speed_control = ctk.CTkSegmentedButton(
-                speed_row,
-                values=[SPEED_SLOW_TEXT, SPEED_NORMAL_TEXT, SPEED_FAST_TEXT],
-                font=("TH Sarabun New", 15, "bold"),
-                command=lambda selected: self._set_sequence_speed(item, selected),
-            )
-            speed_control.pack(side="right")
+        ctk.CTkLabel(
+            self._sequence_player_frame,
+            text=SEQUENCE_SHORTCUT_HELP_TEXT,
+            font=("TH Sarabun New", 15),
+            text_color="#9A9A9A",
+            wraplength=480,
+            justify="center",
+        ).pack(padx=20, pady=(0, 8))
 
-            controls = ctk.CTkFrame(self._body_frame, fg_color="transparent")
-            controls.pack(pady=(0, 12))
+        self._sequence_player_level_label = ctk.CTkLabel(
+            self._sequence_player_frame,
+            text="",
+            font=("TH Sarabun New", 22, "bold"),
+            text_color="#F2F2F2",
+        )
+        self._sequence_player_level_label.pack(pady=(6, 2))
 
-            ctk.CTkButton(
-                controls,
-                text=PREVIOUS_BUTTON_TEXT,
-                font=("TH Sarabun New", 18, "bold"),
-                fg_color="#555555",
-                hover_color="#666666",
-                width=100,
-                height=38,
-                command=lambda: self._move_sequence_frame(item, -1),
-            ).pack(side="left", padx=5)
+        self._sequence_player_status_label = ctk.CTkLabel(
+            self._sequence_player_frame,
+            text="",
+            font=("TH Sarabun New", 17),
+            text_color="#AAAAAA",
+        )
+        self._sequence_player_status_label.pack(pady=(0, 12))
 
-            play_button = ctk.CTkButton(
-                controls,
-                text="",
-                font=("TH Sarabun New", 18, "bold"),
-                fg_color="#4A90D9",
-                hover_color="#3A7BC8",
-                width=100,
-                height=38,
-                command=lambda: self._toggle_sequence_playback(item),
-            )
-            play_button.pack(side="left", padx=5)
+        self._sequence_player_seek_label = ctk.CTkLabel(
+            self._sequence_player_frame,
+            text="",
+            font=("TH Sarabun New", 16, "bold"),
+            text_color="#CCCCCC",
+        )
+        self._sequence_player_seek_label.pack(padx=20, pady=(0, 4))
 
-            ctk.CTkButton(
-                controls,
-                text=REPLAY_BUTTON_TEXT,
-                font=("TH Sarabun New", 18, "bold"),
-                fg_color="#666666",
-                hover_color="#777777",
-                width=100,
-                height=38,
-                command=lambda: self._restart_sequence(item),
-            ).pack(side="left", padx=5)
+        self._sequence_player_seek_slider = ctk.CTkSlider(
+            self._sequence_player_frame,
+            from_=0,
+            to=1,
+            number_of_steps=1,
+            command=self._handle_sequence_seek_from_dialog,
+        )
+        self._sequence_player_seek_slider.pack(fill="x", padx=20, pady=(0, 12))
 
-            ctk.CTkButton(
-                controls,
-                text=NEXT_BUTTON_TEXT,
-                font=("TH Sarabun New", 18, "bold"),
-                fg_color="#555555",
-                hover_color="#666666",
-                width=100,
-                height=38,
-                command=lambda: self._move_sequence_frame(item, 1),
-            ).pack(side="left", padx=5)
+        speed_row = ctk.CTkFrame(self._sequence_player_frame, fg_color="transparent")
+        speed_row.pack(fill="x", padx=20, pady=(0, 12))
 
-            mark_button = ctk.CTkButton(
-                self._body_frame,
-                text="",
-                font=("TH Sarabun New", 18, "bold"),
-                fg_color="#B5544E",
-                hover_color="#9E4640",
-                height=40,
-                corner_radius=18,
-                command=lambda: self._toggle_sequence_fail(item),
-            )
-            mark_button.pack(fill="x", padx=20, pady=(0, 12))
+        self._sequence_player_speed_label = ctk.CTkLabel(
+            speed_row,
+            text="",
+            font=("TH Sarabun New", 16, "bold"),
+            text_color="#CCCCCC",
+        )
+        self._sequence_player_speed_label.pack(side="left")
 
-            ctk.CTkLabel(
-                self._body_frame,
-                text=SEQUENCE_FAILED_LABEL_TEXT,
-                font=("TH Sarabun New", 17, "bold"),
-                text_color="#DDDDDD",
-            ).pack(anchor="w", padx=20)
+        self._sequence_player_speed_control = ctk.CTkSegmentedButton(
+            speed_row,
+            values=[SPEED_SLOW_TEXT, SPEED_NORMAL_TEXT, SPEED_FAST_TEXT],
+            font=("TH Sarabun New", 15, "bold"),
+            command=self._handle_sequence_speed_from_dialog,
+        )
+        self._sequence_player_speed_control.pack(side="right")
 
-            failed_values_label = ctk.CTkLabel(
-                self._body_frame,
-                text="",
-                font=("TH Sarabun New", 17),
-                text_color="#CCCCCC",
-                wraplength=480,
-                justify="left",
-            )
-            failed_values_label.pack(anchor="w", padx=20, pady=(0, 12))
+        controls = ctk.CTkFrame(self._sequence_player_frame, fg_color="transparent")
+        controls.pack(pady=(0, 12))
 
-            summary_label = ctk.CTkLabel(
-                self._body_frame,
-                text="",
-                font=("TH Sarabun New", 18, "bold"),
-                text_color="#F2F2F2",
-                wraplength=480,
-                justify="left",
-            )
-            summary_label.pack(anchor="w", padx=20, pady=(0, 8))
+        self._sequence_player_prev_btn = ctk.CTkButton(
+            controls,
+            text=PREVIOUS_BUTTON_TEXT,
+            font=("TH Sarabun New", 18, "bold"),
+            fg_color="#555555",
+            hover_color="#666666",
+            width=100,
+            height=38,
+            command=self._handle_sequence_prev_from_dialog,
+        )
+        self._sequence_player_prev_btn.pack(side="left", padx=5)
 
-            error_label = ctk.CTkLabel(
-                self._body_frame,
-                text="",
-                font=("TH Sarabun New", 16),
-                text_color="#FF5555",
-            )
-            error_label.pack(anchor="w", padx=20, pady=(0, 4))
+        self._sequence_player_play_btn = ctk.CTkButton(
+            controls,
+            text="",
+            font=("TH Sarabun New", 18, "bold"),
+            fg_color="#4A90D9",
+            hover_color="#3A7BC8",
+            width=100,
+            height=38,
+            command=self._handle_sequence_play_toggle_from_dialog,
+        )
+        self._sequence_player_play_btn.pack(side="left", padx=5)
 
-            summary_button = ctk.CTkButton(
-                self._footer_frame,
-                text=SEQUENCE_SUMMARY_BUTTON_TEXT,
-                font=("TH Sarabun New", 20, "bold"),
-                fg_color="#4A90D9",
-                hover_color="#3A7BC8",
-                height=42,
-                width=120,
-                corner_radius=20,
-                command=lambda: self._submit_sequence_summary(item),
-            )
+        self._sequence_player_replay_btn = ctk.CTkButton(
+            controls,
+            text=REPLAY_BUTTON_TEXT,
+            font=("TH Sarabun New", 18, "bold"),
+            fg_color="#666666",
+            hover_color="#777777",
+            width=100,
+            height=38,
+            command=self._handle_sequence_replay_from_dialog,
+        )
+        self._sequence_player_replay_btn.pack(side="left", padx=5)
 
-            self._sequence_ui = {
-                "level_label": level_label,
-                "status_label": status_label,
-                "seek_label": seek_label,
-                "seek_slider": seek_slider,
-                "speed_label": speed_label,
-                "speed_control": speed_control,
-                "play_button": play_button,
-                "mark_button": mark_button,
-                "failed_values_label": failed_values_label,
-                "summary_label": summary_label,
-                "summary_button": summary_button,
-                "error_label": error_label,
-            }
-            self._bind_sequence_shortcuts(item)
-            self._update_sequence_ui(item)
+        self._sequence_player_next_btn = ctk.CTkButton(
+            controls,
+            text=NEXT_BUTTON_TEXT,
+            font=("TH Sarabun New", 18, "bold"),
+            fg_color="#555555",
+            hover_color="#666666",
+            width=100,
+            height=38,
+            command=self._handle_sequence_next_from_dialog,
+        )
+        self._sequence_player_next_btn.pack(side="left", padx=5)
 
-            if self._idx > 0:
-                ctk.CTkButton(
-                    self._footer_frame,
-                    text=PREVIOUS_BUTTON_TEXT,
-                    font=("TH Sarabun New", 20, "bold"),
-                    fg_color="transparent",
-                    hover_color="#3a3a3a",
-                    border_width=2,
-                    border_color="#888888",
-                    text_color="#CCCCCC",
-                    height=42,
-                    width=120,
-                    corner_radius=20,
-                    command=self._go_previous,
-                ).pack(side="right", pady=10)
+        self._sequence_player_mark_btn = ctk.CTkButton(
+            self._sequence_player_frame,
+            text="",
+            font=("TH Sarabun New", 18, "bold"),
+            fg_color="#B5544E",
+            hover_color="#9E4640",
+            height=40,
+            corner_radius=18,
+            command=self._handle_sequence_mark_from_dialog,
+        )
+        self._sequence_player_mark_btn.pack(fill="x", padx=20, pady=(0, 12))
 
-        win.deiconify()
-        win.lift()
-        win.focus_force()
+        ctk.CTkLabel(
+            self._sequence_player_frame,
+            text=SEQUENCE_FAILED_LABEL_TEXT,
+            font=("TH Sarabun New", 17, "bold"),
+            text_color="#DDDDDD",
+        ).pack(anchor="w", padx=20)
 
-    def _build_channel_checkboxes(self, container, total, prev_ans=None):
-        """สร้าง checkboxes 1-N"""
-        ctk.CTkLabel(container, text=INVISIBLE_CHANNELS_TEXT,
-                     font=("TH Sarabun New", 17, "bold"),
-                     text_color="#AAAAAA").pack(anchor="w", padx=5, pady=(5, 5))
+        self._sequence_player_failed_values_label = ctk.CTkLabel(
+            self._sequence_player_frame,
+            text="",
+            font=("TH Sarabun New", 17),
+            text_color="#CCCCCC",
+            wraplength=480,
+            justify="left",
+        )
+        self._sequence_player_failed_values_label.pack(anchor="w", padx=20, pady=(0, 12))
 
-        prev_channels = set()
-        if prev_ans and "invisible_channels" in prev_ans:
-            prev_channels = set(prev_ans["invisible_channels"])
+        self._sequence_player_summary_label = ctk.CTkLabel(
+            self._sequence_player_frame,
+            text="",
+            font=("TH Sarabun New", 18, "bold"),
+            text_color="#F2F2F2",
+            wraplength=480,
+            justify="left",
+        )
+        self._sequence_player_summary_label.pack(anchor="w", padx=20, pady=(0, 8))
 
-        cols = 9
-        row_frame = None
-        for i in range(1, total + 1):
-            if (i - 1) % cols == 0:
-                row_frame = ctk.CTkFrame(container, fg_color="transparent")
-                row_frame.pack(fill="x", padx=5, pady=1)
+        self._sequence_started_error_label = ctk.CTkLabel(
+            self._sequence_player_frame,
+            text="",
+            font=("TH Sarabun New", 16),
+            text_color="#FF5555",
+        )
+        self._sequence_started_error_label.pack(anchor="w", padx=20, pady=(0, 4))
 
-            var = ctk.BooleanVar(value=(i in prev_channels))
-            self._channel_vars[i] = var
-
-            ctk.CTkCheckBox(row_frame, text=str(i),
-                            font=("TH Sarabun New", 15),
-                            variable=var,
-                            width=45, height=28,
-                            checkbox_width=20, checkbox_height=20,
-                            fg_color="#666666",
-                            hover_color="#888888",
-                            text_color="#CCCCCC",
-                            corner_radius=4).pack(side="left", padx=2)
-
-    def _on_answer_change(self, item=None):
-        """เมื่อเปลี่ยน radio → show/hide checkboxes"""
-        if self._error_label:
-            self._error_label.configure(text="")
-
-        if self._answer_var.get() == "no" and self._channel_vars:
-            # แทรก checkboxes ก่อน note_frame
-            self._channels_container.pack(fill="x", padx=20, pady=(0, 5),
-                                          before=self._note_frame)
-        else:
-            self._channels_container.pack_forget()
-
-    def _build_card_window(self):
-        """สร้าง Toplevel สำหรับคำถาม"""
-        self._card_win = ctk.CTkToplevel(self)
-        win = self._card_win
-        win.title("")
-        win.attributes("-topmost", True)
-        win.resizable(False, False)
-
-        card_w, card_h = 540, 440
-        sw = self.winfo_screenwidth()
-        sh = self.winfo_screenheight()
-        x = (sw - card_w) // 2
-        y = (sh - card_h) // 2
-        win.geometry(f"{card_w}x{card_h}+{x}+{y}")
-        win.configure(fg_color="#2a2a2a")
-
-        win.protocol("WM_DELETE_WINDOW", lambda: None)
-
-        # Body (scrollable)
-        self._body_frame = ctk.CTkScrollableFrame(win, fg_color="transparent")
-        self._body_frame.pack(fill="both", expand=True)
-
-        # Footer
         self._footer_frame = ctk.CTkFrame(win, fg_color="transparent", height=60)
         self._footer_frame.pack(fill="x")
         self._footer_frame.pack_propagate(False)
 
+        self._footer_prev_btn = ctk.CTkButton(
+            self._footer_frame,
+            text=PREVIOUS_BUTTON_TEXT,
+            font=("TH Sarabun New", 20, "bold"),
+            fg_color="transparent",
+            hover_color="#3a3a3a",
+            border_width=2,
+            border_color="#888888",
+            text_color="#CCCCCC",
+            height=42,
+            width=120,
+            corner_radius=20,
+            command=self._go_previous,
+        )
+
+        self._footer_next_btn = ctk.CTkButton(
+            self._footer_frame,
+            text=NEXT_BUTTON_TEXT,
+            font=("TH Sarabun New", 20, "bold"),
+            fg_color="#4A90D9",
+            hover_color="#3A7BC8",
+            height=42,
+            width=120,
+            corner_radius=20,
+            command=self._submit_current_question,
+        )
+
+        self._footer_start_btn = ctk.CTkButton(
+            self._footer_frame,
+            text=START_BUTTON_TEXT,
+            font=("TH Sarabun New", 20, "bold"),
+            fg_color="#4A90D9",
+            hover_color="#3A7BC8",
+            height=42,
+            width=120,
+            corner_radius=20,
+            command=self._start_current_sequence,
+        )
+
+        self._footer_summary_btn = ctk.CTkButton(
+            self._footer_frame,
+            text=SEQUENCE_SUMMARY_BUTTON_TEXT,
+            font=("TH Sarabun New", 20, "bold"),
+            fg_color="#4A90D9",
+            hover_color="#3A7BC8",
+            height=42,
+            width=120,
+            corner_radius=20,
+            command=self._submit_current_sequence_summary,
+        )
+
+        self._sequence_player_ui = {
+            "level_label": self._sequence_player_level_label,
+            "status_label": self._sequence_player_status_label,
+            "seek_label": self._sequence_player_seek_label,
+            "seek_slider": self._sequence_player_seek_slider,
+            "speed_label": self._sequence_player_speed_label,
+            "speed_control": self._sequence_player_speed_control,
+            "play_button": self._sequence_player_play_btn,
+            "mark_button": self._sequence_player_mark_btn,
+            "failed_values_label": self._sequence_player_failed_values_label,
+            "summary_label": self._sequence_player_summary_label,
+            "summary_button": self._footer_summary_btn,
+            "error_label": self._sequence_started_error_label,
+        }
+
         win.lift()
         win.focus_force()
-
-    # ═══════════════════════════════════════════════════════════════════════
-    # Validation + Submit
-    # ═══════════════════════════════════════════════════════════════════════
 
     def _try_submit(self, item):
         """ตรวจสอบก่อน submit"""
