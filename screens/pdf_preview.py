@@ -1,5 +1,6 @@
 import os
 import time
+from collections import OrderedDict
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -34,7 +35,9 @@ class PdfPreviewScreen(ctk.CTkFrame):
         self._perf_enabled = os.environ.get("MEDICAL_PERF", "").strip() not in ("", "0", "false", "False")
         self._ui_built = False
         self._pdf_key = None
-        self._page_image_cache = {}  # (page_index, max_w) -> ImageTk.PhotoImage
+        self._page_image_cache = OrderedDict()  # (page_index, max_w) -> ImageTk.PhotoImage (LRU)
+        self._pdf_cache_max_pages = self._env_int("MEDICAL_CACHE_PDF_PAGES", 8, min_value=0, max_value=100)
+        self._pdf_cache_warm_next = os.environ.get("MEDICAL_PDF_WARM_NEXT", "").strip() in ("1", "true", "True")
         self._title_label = None
         self.preview_label = None
         self.page_label = None
@@ -69,6 +72,38 @@ class PdfPreviewScreen(ctk.CTkFrame):
             self._title_label.configure(text=self.title_text)
 
         self.after(1, self._render_current_page)
+
+    def _env_int(self, name: str, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
+        raw = os.environ.get(name, "").strip()
+        try:
+            val = int(raw)
+        except Exception:
+            val = default
+        if min_value is not None and val < min_value:
+            val = min_value
+        if max_value is not None and val > max_value:
+            val = max_value
+        return val
+
+    def _lru_get(self, key):
+        try:
+            val = self._page_image_cache.pop(key)
+        except KeyError:
+            return None
+        self._page_image_cache[key] = val
+        return val
+
+    def _lru_put(self, key, value):
+        if self._pdf_cache_max_pages <= 0:
+            return
+        if key in self._page_image_cache:
+            try:
+                self._page_image_cache.pop(key)
+            except KeyError:
+                pass
+        self._page_image_cache[key] = value
+        while len(self._page_image_cache) > self._pdf_cache_max_pages:
+            self._page_image_cache.popitem(last=False)
 
     def _build_ui(self):
         if self._ui_built:
@@ -178,14 +213,14 @@ class PdfPreviewScreen(ctk.CTkFrame):
 
         max_w = max(400, self.winfo_width() - 180)
         cache_key = (self.page_index, max_w)
-        cached = self._page_image_cache.get(cache_key)
+        cached = self._lru_get(cache_key)
         if cached is None:
             image = render_page(self.pdf_bytes, self.page_index, scale=1.6)
             if image.width > max_w:
                 ratio = max_w / image.width
                 image = image.resize((int(image.width * ratio), int(image.height * ratio)))
             cached = ImageTk.PhotoImage(image)
-            self._page_image_cache[cache_key] = cached
+            self._lru_put(cache_key, cached)
 
         self._tk_img = cached
         self.preview_label.configure(image=cached, text="")
@@ -200,8 +235,8 @@ class PdfPreviewScreen(ctk.CTkFrame):
                 f"ms={(time.perf_counter() - t0) * 1000:.1f}"
             )
 
-        # Warm up next page for smoother paging
-        if self.page_index + 1 < self.page_count:
+        # Optional: warm up next page (bounded by LRU cap)
+        if self._pdf_cache_warm_next and self.page_index + 1 < self.page_count:
             next_key = (self.page_index + 1, max_w)
             if next_key not in self._page_image_cache:
                 self.after(1, lambda: self._warm_cache_page(self.page_index + 1, max_w))
@@ -212,18 +247,17 @@ class PdfPreviewScreen(ctk.CTkFrame):
         cache_key = (page_index, max_w)
         if cache_key in self._page_image_cache:
             return
+        if self._pdf_cache_max_pages <= 0:
+            return
         image = render_page(self.pdf_bytes, page_index, scale=1.6)
         if image.width > max_w:
             ratio = max_w / image.width
             image = image.resize((int(image.width * ratio), int(image.height * ratio)))
-        self._page_image_cache[cache_key] = ImageTk.PhotoImage(image)
+        self._lru_put(cache_key, ImageTk.PhotoImage(image))
 
     def warmup(self):
         # Hook for app preload; actual warmup occurs on_show when a PDF is provided.
         return
-        self.page_label.configure(text=f"หน้า {self.page_index + 1}/{self.page_count}")
-        self.prev_btn.configure(state="normal" if self.page_index > 0 else "disabled")
-        self.next_btn.configure(state="normal" if self.page_index < self.page_count - 1 else "disabled")
 
     def _prev_page(self):
         if self.page_index > 0:

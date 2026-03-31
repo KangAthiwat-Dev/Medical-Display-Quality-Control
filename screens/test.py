@@ -1,5 +1,6 @@
 import os
 import time
+from collections import OrderedDict
 import tkinter as tk
 import customtkinter as ctk
 from PIL import ImageTk
@@ -74,7 +75,8 @@ class TestScreen(ctk.CTkFrame):
         self._back = back_command
         self._perf_enabled = os.environ.get("MEDICAL_PERF", "").strip() not in ("", "0", "false", "False")
         self._cache_target_size = (1920, 1080)
-        self._sequence_image_cache = {}  # (frame_path, w, h) -> ImageTk.PhotoImage
+        self._seq_cache_max_frames = self._env_int("MEDICAL_CACHE_SEQ_FRAMES", 128, min_value=0, max_value=5000)
+        self._sequence_image_cache = OrderedDict()  # (frame_path, w, h) -> ImageTk.PhotoImage (LRU)
 
         # state
         self._items = []
@@ -129,6 +131,38 @@ class TestScreen(ctk.CTkFrame):
         self.winfo_toplevel().bind_all("<space>", self._handle_main_space_shortcut, add="+")
         self.winfo_toplevel().bind_all("<KeyPress-m>", self._handle_main_mark_shortcut, add="+")
         self.winfo_toplevel().bind_all("<KeyPress-M>", self._handle_main_mark_shortcut, add="+")
+
+    def _env_int(self, name: str, default: int, min_value: int | None = None, max_value: int | None = None) -> int:
+        raw = os.environ.get(name, "").strip()
+        try:
+            val = int(raw)
+        except Exception:
+            val = default
+        if min_value is not None and val < min_value:
+            val = min_value
+        if max_value is not None and val > max_value:
+            val = max_value
+        return val
+
+    def _seq_cache_get(self, key):
+        try:
+            val = self._sequence_image_cache.pop(key)
+        except KeyError:
+            return None
+        self._sequence_image_cache[key] = val
+        return val
+
+    def _seq_cache_put(self, key, value):
+        if self._seq_cache_max_frames <= 0:
+            return
+        if key in self._sequence_image_cache:
+            try:
+                self._sequence_image_cache.pop(key)
+            except KeyError:
+                pass
+        self._sequence_image_cache[key] = value
+        while len(self._sequence_image_cache) > self._seq_cache_max_frames:
+            self._sequence_image_cache.popitem(last=False)
 
     def _bind_dock_children(self, widget):
         """Recursively bind Enter ให้ทุก child ของ dock"""
@@ -481,11 +515,11 @@ class TestScreen(ctk.CTkFrame):
         ch = self._canvas.winfo_height() or self._cache_target_size[1]
 
         cache_key = (frame_path, cw, ch)
-        cached = self._sequence_image_cache.get(cache_key)
+        cached = self._seq_cache_get(cache_key)
         if cached is None:
             pil_img = load_pattern_sequence_frame(frame_path, cw, ch)
             cached = ImageTk.PhotoImage(pil_img)
-            self._sequence_image_cache[cache_key] = cached
+            self._seq_cache_put(cache_key, cached)
         self._tk_img = cached
 
         self._canvas.delete("all")
@@ -499,41 +533,8 @@ class TestScreen(ctk.CTkFrame):
             )
 
     def warmup(self):
-        """Preload sequence frames into memory for runtime smoothness."""
-        t0 = time.perf_counter()
-        cw, ch = self._cache_target_size
-        warmed = 0
-
-        for dtype, periods in (TEST_CONFIG or {}).items():
-            if not isinstance(periods, dict):
-                continue
-            for period, groups in periods.items():
-                if not isinstance(groups, list):
-                    continue
-                for g in groups:
-                    for item in (g.get("items") or []):
-                        item_id = item.get("item_id")
-                        if not item_id:
-                            continue
-                        if not has_pattern_sequence(dtype, period, item_id):
-                            continue
-                        frame_paths = get_pattern_sequence_frames(dtype, period, item_id)
-                        for fp in frame_paths:
-                            key = (fp, cw, ch)
-                            if key in self._sequence_image_cache:
-                                continue
-                            try:
-                                pil_img = load_pattern_sequence_frame(fp, cw, ch)
-                                self._sequence_image_cache[key] = ImageTk.PhotoImage(pil_img)
-                                warmed += 1
-                            except Exception:
-                                continue
-
-        if self._perf_enabled:
-            print(
-                f"[PERF] TestScreen.warmup frames={warmed} "
-                f"ms={(time.perf_counter() - t0) * 1000:.1f}"
-            )
+        # Disabled in balanced mode (preloading all frames is too heavy).
+        return
 
     def _get_current_sequence_level(self, item) -> str:
         state = self._get_sequence_state(item)

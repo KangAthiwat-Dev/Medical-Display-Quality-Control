@@ -32,6 +32,7 @@ class App(ctk.CTk):
         super().__init__()
         self._perf_enabled = os.environ.get("MEDICAL_PERF", "").strip() not in ("", "0", "false", "False")
         self._perf_last_screen = None
+        self._preload_enabled = os.environ.get("MEDICAL_PRELOAD_SCREENS", "").strip() in ("1", "true", "True")
         self.title("Medical Display Quality Control")
         
         system = platform.system()
@@ -60,7 +61,8 @@ class App(ctk.CTk):
 
         # Register screens
         self.register_screens()
-        self._preload_screens()
+        if self._preload_enabled:
+            self._preload_screens()
 
         # Show home screen
         self.show_screen("home")
@@ -82,13 +84,15 @@ class App(ctk.CTk):
                 self.screens[name] = factory(self)
 
         # Optional warmup hook (implemented per-screen where needed)
-        for s in self.screens.values():
-            if hasattr(s, "warmup"):
-                try:
-                    s.warmup()
-                except Exception:
-                    # Warmup must never block app startup due to incidental failures
-                    pass
+        warmup_enabled = os.environ.get("MEDICAL_WARMUP", "").strip() in ("1", "true", "True")
+        if warmup_enabled:
+            for s in self.screens.values():
+                if hasattr(s, "warmup"):
+                    try:
+                        s.warmup()
+                    except Exception:
+                        # Warmup must never block app startup due to incidental failures
+                        pass
 
         if self._perf_enabled:
             self._perf_log(f"preload_screens count={len(self.screens)} ms={(time.perf_counter() - t0) * 1000:.1f}")
