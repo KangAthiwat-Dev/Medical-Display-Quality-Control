@@ -1,3 +1,5 @@
+import os
+import time
 import customtkinter as ctk
 from datetime import datetime
 from constants.history_text import (
@@ -73,8 +75,11 @@ class HistoryScreen(ctk.CTkFrame):
         self._all_records = list(self.records)
         self._selected_idx = None
         self._row_frames = []
+        self._row_pool = []
+        self._empty_row_label = None
         self._multi_select_mode = False
         self._checked_ids = set()
+        self._perf_enabled = os.environ.get("MEDICAL_PERF", "").strip() not in ("", "0", "false", "False")
 
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=1)
@@ -375,22 +380,102 @@ class HistoryScreen(ctk.CTkFrame):
 
     # ──────────────────────────────────────────────
     def _render_rows(self, reset_scroll: bool = True):
-        for w in self._scroll.winfo_children():
-            w.destroy()
-        self._row_frames = []
+        t0 = time.perf_counter()
+        if self._empty_row_label is None:
+            self._empty_row_label = ctk.CTkLabel(
+                self._scroll,
+                text="ไม่พบข้อมูล",
+                font=self._font_row,
+                text_color=self._text_gray,
+                anchor="w",
+            )
 
         if not self.records:
-            ctk.CTkLabel(
-                self._scroll, text="ไม่พบข้อมูล",
-                font=self._font_row, text_color=self._text_gray,
-            ).grid(row=0, column=0, columnspan=7, pady=24, sticky="w")
+            self._empty_row_label.grid(row=0, column=0, columnspan=7, pady=24, sticky="w")
+            for entry in self._row_pool:
+                entry["row"].grid_remove()
+                entry["divider"].grid_remove()
+            self._row_frames = []
             if reset_scroll:
                 self.after(0, lambda: self._scroll._parent_canvas.yview_moveto(0))
+            if self._perf_enabled:
+                print(
+                    f"[PERF] HistoryScreen._render_rows rows=0 "
+                    f"multi={int(self._multi_select_mode)} ms={(time.perf_counter() - t0) * 1000:.1f}"
+                )
             return
+        else:
+            self._empty_row_label.grid_remove()
 
         if self._selected_idx is not None and self._selected_idx >= len(self.records):
             self._selected_idx = None
+        if not self._multi_select_mode:
+            self._checked_ids.clear()
 
+        # Ensure pool size
+        while len(self._row_pool) < len(self.records):
+            row_frame = ctk.CTkFrame(
+                self._scroll,
+                fg_color=TRANSPARENT,
+                corner_radius=12,
+                cursor="hand2",
+            )
+            for i, w in enumerate(self._col_weights):
+                row_frame.grid_columnconfigure(i, weight=w)
+
+            # Column 0 always uses a cell frame with optional checkbox
+            cell0 = ctk.CTkFrame(row_frame, fg_color=TRANSPARENT)
+            cell0.grid(row=0, column=0, padx=12, pady=8, sticky="ew")
+            cell0.grid_columnconfigure(2, weight=1)
+
+            check = ctk.CTkCheckBox(
+                cell0,
+                text="",
+                width=18,
+                checkbox_width=18,
+                checkbox_height=18,
+                fg_color=HISTORY_ACCENT,
+                hover_color=HISTORY_ACCENT_HOVER,
+                border_color=WHITE,
+                checkmark_color=WHITE,
+            )
+            check.grid(row=0, column=0, padx=(0, 8), sticky="w")
+
+            label0 = ctk.CTkLabel(
+                cell0,
+                text="",
+                font=self._font_row,
+                text_color=self._text_white,
+                anchor="w",
+                cursor="hand2",
+            )
+            label0.grid(row=0, column=2, sticky="w")
+
+            labels = [label0]
+            for col_i in range(1, 7):
+                lbl = ctk.CTkLabel(
+                    row_frame,
+                    text="",
+                    font=self._font_row,
+                    text_color=self._text_white,
+                    anchor="w",
+                )
+                lbl.grid(row=0, column=col_i, padx=12, pady=8, sticky="ew")
+                labels.append(lbl)
+
+            divider = ctk.CTkFrame(self._scroll, height=1, fg_color=self._line_color)
+            self._row_pool.append(
+                {
+                    "row": row_frame,
+                    "divider": divider,
+                    "cell0": cell0,
+                    "check": check,
+                    "labels": labels,
+                }
+            )
+
+        # Render visible rows
+        self._row_frames = []
         for idx, rec in enumerate(self.records):
             record_id = rec.get("id")
             fields = [
@@ -402,79 +487,62 @@ class HistoryScreen(ctk.CTkFrame):
                 rec.get("evaluator", ""),
                 rec.get("display_model", ""),
             ]
-            is_selected = idx == self._selected_idx
-            row_color = HISTORY_ROW_SELECTED if is_selected else TRANSPARENT
 
-            row_frame = ctk.CTkFrame(
-                self._scroll,
-                fg_color=row_color,
-                corner_radius=12,
-                cursor="hand2",
-            )
+            entry = self._row_pool[idx]
+            row_frame = entry["row"]
+            divider = entry["divider"]
+            check = entry["check"]
+            labels = entry["labels"]
+
+            is_selected = (idx == self._selected_idx) if not self._multi_select_mode else (record_id in self._checked_ids)
+            row_frame.configure(fg_color=HISTORY_ROW_SELECTED if is_selected else TRANSPARENT)
+
+            # Position row + divider
             row_frame.grid(row=idx * 2, column=0, columnspan=7, sticky="ew", pady=(0, 2))
-            for i, w in enumerate(self._col_weights):
-                row_frame.grid_columnconfigure(i, weight=w)
+            divider.grid(row=idx * 2 + 1, column=0, columnspan=7, sticky="ew", padx=4, pady=(0, 4))
             self._row_frames.append(row_frame)
 
-            for col_i, val in enumerate(fields):
-                if self._multi_select_mode and col_i == 0:
-                    cell = ctk.CTkFrame(row_frame, fg_color=TRANSPARENT)
-                    cell.grid(row=0, column=col_i, padx=12, pady=8, sticky="ew")
-                    cell.grid_columnconfigure(1, weight=1)
-
-                    check = ctk.CTkCheckBox(
-                        cell,
-                        text="",
-                        width=18,
-                        checkbox_width=18,
-                        checkbox_height=18,
-                        fg_color=HISTORY_ACCENT,
-                        hover_color=HISTORY_ACCENT_HOVER,
-                        border_color=WHITE,
-                        checkmark_color=WHITE,
-                    )
-                    if record_id in self._checked_ids:
-                        check.select()
-                    else:
-                        check.deselect()
-                    check.grid(row=0, column=0, padx=(0, 8), sticky="w")
-                    check.bind("<Button-1>", lambda e, rid=record_id: self._handle_multi_select_click(e, rid))
-
-                    label = ctk.CTkLabel(
-                        cell, text=val,
-                        font=self._font_row, text_color=self._text_white, anchor="w",
-                        cursor="hand2",
-                    )
-                    label.grid(row=0, column=1, sticky="w")
-                    for widget in [cell, label]:
-                        widget.bind("<Button-1>", lambda e, rid=record_id: self._handle_multi_select_click(e, rid))
-                else:
-                    label = ctk.CTkLabel(
-                        row_frame, text=val,
-                        font=self._font_row, text_color=self._text_white, anchor="w",
-                    )
-                    label.grid(row=0, column=col_i, padx=12, pady=8, sticky="ew")
-                    if self._multi_select_mode:
-                        label.bind("<Button-1>", lambda e, rid=record_id: self._handle_multi_select_click(e, rid))
-                    else:
-                        label.bind("<Button-1>", lambda e, i=idx: self._select_row(i))
-                        label.bind("<Double-Button-1>", lambda e, i=idx: self._open_detail(i))
-
+            # Checkbox visibility + state
             if self._multi_select_mode:
-                row_frame.bind("<Button-1>", lambda e, rid=record_id: self._handle_multi_select_click(e, rid))
+                check.grid()
+                if record_id in self._checked_ids:
+                    check.select()
+                else:
+                    check.deselect()
             else:
-                row_frame.bind("<Button-1>", lambda e, i=idx: self._select_row(i))
-                row_frame.bind("<Double-Button-1>", lambda e, i=idx: self._open_detail(i))
-            row_frame.bind("<Enter>", lambda e, i=idx: self._set_row_hover(i, True))
-            row_frame.bind("<Leave>", lambda e, i=idx: self._set_row_hover(i, False))
+                check.grid_remove()
+                check.deselect()
 
-            # divider
-            ctk.CTkFrame(
-                self._scroll, height=1, fg_color=self._line_color,
-            ).grid(row=idx * 2 + 1, column=0, columnspan=7, sticky="ew", padx=4, pady=(0, 4))
+            # Update label texts
+            for col_i, val in enumerate(fields):
+                labels[col_i].configure(text=val)
+
+            # Rebind events (replace previous bindings)
+            if self._multi_select_mode:
+                for w in [row_frame, entry["cell0"], check] + labels:
+                    w.bind("<Button-1>", lambda e, rid=record_id: self._handle_multi_select_click(e, rid))
+                row_frame.bind("<Enter>", lambda e, i=idx: self._set_row_hover(i, True))
+                row_frame.bind("<Leave>", lambda e, i=idx: self._set_row_hover(i, False))
+            else:
+                for w in [row_frame, entry["cell0"]] + labels:
+                    w.bind("<Button-1>", lambda e, i=idx: self._select_row(i))
+                    w.bind("<Double-Button-1>", lambda e, i=idx: self._open_detail(i))
+                row_frame.bind("<Enter>", lambda e, i=idx: self._set_row_hover(i, True))
+                row_frame.bind("<Leave>", lambda e, i=idx: self._set_row_hover(i, False))
+
+        # Hide extra pooled rows
+        for j in range(len(self.records), len(self._row_pool)):
+            self._row_pool[j]["row"].grid_remove()
+            self._row_pool[j]["divider"].grid_remove()
 
         if reset_scroll:
             self.after(0, lambda: self._scroll._parent_canvas.yview_moveto(0))
+
+        if self._perf_enabled:
+            print(
+                f"[PERF] HistoryScreen._render_rows rows={len(self.records)} "
+                f"multi={int(self._multi_select_mode)} ms={(time.perf_counter() - t0) * 1000:.1f}"
+            )
 
     def _select_row(self, idx: int):
         if self._multi_select_mode:

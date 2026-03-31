@@ -1,3 +1,5 @@
+import os
+import time
 import customtkinter as ctk
 from widgets.nav_bar import NavBarWidget
 from widgets.side_bar import SideBarWidget
@@ -20,6 +22,9 @@ class EvaluatorListScreen(ctk.CTkFrame):
         self.evaluators = evaluators or []
         self.all_evaluators = self.evaluators.copy()
         self._delete_dialog = None
+        self._perf_enabled = os.environ.get("MEDICAL_PERF", "").strip() not in ("", "0", "false", "False")
+        self._row_pool = []
+        self._empty_row_label = None
 
         # กางโครงสร้างแบ่งหน้าจอเป็น 3 โซน (1. Navbar บนสุดพาดขวาง 2. Sidebar ซ้าย 3. Main Content ขวา)
         self.grid_rowconfigure(0, weight=0) # แถว 0 ล็อกความสูงพอดีตาม Navbar
@@ -141,69 +146,120 @@ class EvaluatorListScreen(ctk.CTkFrame):
         self._render_rows()
 
     def _render_rows(self):
-        # ล้างของเก่า
-        for w in self._row_container.winfo_children():
-            w.destroy()
-            
-        # คืนค่า Grid weights ป้องกันแถวเก่าค้างการดันพื้นที่ (สาเหตุการเลื่อนเพี้ยน)
-        for r in range(self._row_container.grid_size()[1] + 2):
-            self._row_container.grid_rowconfigure(r, weight=0)
-
-        if not self.evaluators:
-            ctk.CTkLabel(
+        t0 = time.perf_counter()
+        if self._empty_row_label is None:
+            self._empty_row_label = ctk.CTkLabel(
                 self._row_container,
                 text="ยังไม่มีผู้ประเมิน",
                 font=self._font_row,
                 text_color=self._text_gray,
-            ).grid(row=0, column=0, columnspan=3, pady=40)
+            )
+
+        if not self.evaluators:
+            self._empty_row_label.grid(row=0, column=0, columnspan=3, pady=40)
+            for entry in self._row_pool:
+                entry["first"].grid_remove()
+                entry["last"].grid_remove()
+                entry["actions"].grid_remove()
+                entry["divider"].grid_remove()
             return
+        else:
+            self._empty_row_label.grid_remove()
+
+        # Ensure pool size
+        while len(self._row_pool) < len(self.evaluators):
+            first_lbl = ctk.CTkLabel(
+                self._row_container,
+                text="",
+                font=self._font_row,
+                text_color=self._text_white,
+                anchor="w",
+            )
+            last_lbl = ctk.CTkLabel(
+                self._row_container,
+                text="",
+                font=self._font_row,
+                text_color=self._text_white,
+                anchor="w",
+            )
+
+            actions = ctk.CTkFrame(self._row_container, fg_color="transparent")
+            edit_btn = ctk.CTkButton(
+                actions,
+                text="✏",
+                font=self._font_icon,
+                width=36,
+                height=36,
+                corner_radius=8,
+                fg_color="transparent",
+                hover_color=self._gray_btn,
+                text_color="white",
+                command=lambda: None,
+            )
+            del_btn = ctk.CTkButton(
+                actions,
+                text="🗑",
+                font=self._font_icon,
+                width=36,
+                height=36,
+                corner_radius=8,
+                fg_color="transparent",
+                hover_color="#5a1a1a",
+                text_color="#e05a5a",
+                command=lambda: None,
+            )
+            edit_btn.pack(side="left", padx=4)
+            del_btn.pack(side="left", padx=4)
+
+            divider = ctk.CTkFrame(self._row_container, height=1, fg_color=self._line_color)
+
+            self._row_pool.append(
+                {
+                    "first": first_lbl,
+                    "last": last_lbl,
+                    "actions": actions,
+                    "edit_btn": edit_btn,
+                    "del_btn": del_btn,
+                    "divider": divider,
+                }
+            )
 
         for idx, ev in enumerate(self.evaluators):
             r = idx * 2  # แยกแถวคู่เพื่อให้มีพื้นที่แทรกเส้นคั่น
+            entry = self._row_pool[idx]
 
-            ctk.CTkLabel(
-                self._row_container,
-                text=ev.get("first", ""),
-                font=self._font_row, text_color=self._text_white, anchor="w",
-            ).grid(row=r, column=0, padx=20, pady=10, sticky="ew")
+            entry["first"].configure(text=ev.get("first", ""))
+            entry["last"].configure(text=ev.get("last", ""))
 
-            ctk.CTkLabel(
-                self._row_container,
-                text=ev.get("last", ""),
-                font=self._font_row, text_color=self._text_white, anchor="w",
-            ).grid(row=r, column=1, padx=20, pady=10, sticky="ew")
+            entry["first"].grid(row=r, column=0, padx=20, pady=10, sticky="ew")
+            entry["last"].grid(row=r, column=1, padx=20, pady=10, sticky="ew")
+            entry["actions"].grid(row=r, column=2, padx=12, pady=6, sticky="e")
 
-            # action buttons
-            action = ctk.CTkFrame(self._row_container, fg_color="transparent")
-            action.grid(row=r, column=2, padx=12, pady=6, sticky="e")
-            
             # ป้องกันบัคเวลาเสิร์จแล้วคิวอิงสลับ
             original_idx = self.all_evaluators.index(ev)
+            entry["edit_btn"].configure(command=lambda i=original_idx: self._on_edit(i))
+            entry["del_btn"].configure(command=lambda i=original_idx: self._on_delete(i))
 
-            ctk.CTkButton(
-                action, text="✏", font=self._font_icon,
-                width=36, height=36, corner_radius=8,
-                fg_color="transparent", hover_color=self._gray_btn,
-                text_color="white",
-                command=lambda i=original_idx: self._on_edit(i),
-            ).pack(side="left", padx=4)
-
-            ctk.CTkButton(
-                action, text="🗑", font=self._font_icon,
-                width=36, height=36, corner_radius=8,
-                fg_color="transparent", hover_color="#5a1a1a",
-                text_color="#e05a5a",
-                command=lambda i=original_idx: self._on_delete(i),
-            ).pack(side="left", padx=4)
-
-            # divider ไว้ที่รอยต่อด้านล่าง (แถวคี่)
             if idx < len(self.evaluators) - 1:
-                ctk.CTkFrame(
-                    self._row_container, height=1, fg_color=self._line_color,
-                ).grid(row=r + 1, column=0, columnspan=3, sticky="ew", padx=8, pady=4)
+                entry["divider"].grid(row=r + 1, column=0, columnspan=3, sticky="ew", padx=8, pady=4)
+            else:
+                entry["divider"].grid_remove()
+
+        # Hide extra pooled rows
+        for j in range(len(self.evaluators), len(self._row_pool)):
+            self._row_pool[j]["first"].grid_remove()
+            self._row_pool[j]["last"].grid_remove()
+            self._row_pool[j]["actions"].grid_remove()
+            self._row_pool[j]["divider"].grid_remove()
                 
         # สั่งให้แถวสุดท้ายว่างๆ ยืดพื้นที่ออก เพื่อดันให้ก้อนรายชื่อที่เหลืองัดลอยไปชิดบนสุดตลอดเวลา
         self._row_container.grid_rowconfigure(len(self.evaluators) * 2, weight=1)
+
+        if self._perf_enabled:
+            print(
+                f"[PERF] EvaluatorListScreen._render_rows rows={len(self.evaluators)} "
+                f"ms={(time.perf_counter() - t0) * 1000:.1f}"
+            )
 
     # ── Public: refresh list from outside ──
     def set_evaluators(self, evaluators: list):

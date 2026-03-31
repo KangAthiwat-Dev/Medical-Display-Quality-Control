@@ -1,3 +1,5 @@
+import os
+import time
 from pathlib import Path
 from tkinter import filedialog, messagebox
 
@@ -29,12 +31,22 @@ class PdfPreviewScreen(ctk.CTkFrame):
         self.page_index = 0
         self.page_count = 0
         self._tk_img = None
+        self._perf_enabled = os.environ.get("MEDICAL_PERF", "").strip() not in ("", "0", "false", "False")
+        self._ui_built = False
+        self._pdf_key = None
+        self._page_image_cache = {}  # (page_index, max_w) -> ImageTk.PhotoImage
+        self._title_label = None
+        self.preview_label = None
+        self.page_label = None
+        self.prev_btn = None
+        self.next_btn = None
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
         self.main_frame = ctk.CTkFrame(self, fg_color=TRANSPARENT)
         self.main_frame.grid(row=0, column=0, sticky="nsew")
+        self._build_ui()
 
     def on_show(self, pdf_bytes=None, title_text=None, default_filename=None, **kwargs):
         if pdf_bytes is not None:
@@ -45,13 +57,23 @@ class PdfPreviewScreen(ctk.CTkFrame):
             self.title_text = title_text
         if default_filename:
             self.default_filename = default_filename
-
-        for widget in self.main_frame.winfo_children():
-            widget.destroy()
         self._build_ui()
-        self.after(50, self._render_current_page)
+
+        # Reset cache when PDF changes
+        pdf_key = (len(self.pdf_bytes or b""), (self.pdf_bytes or b"")[:32], (self.pdf_bytes or b"")[-32:])
+        if pdf_key != self._pdf_key:
+            self._pdf_key = pdf_key
+            self._page_image_cache.clear()
+
+        if self._title_label is not None:
+            self._title_label.configure(text=self.title_text)
+
+        self.after(1, self._render_current_page)
 
     def _build_ui(self):
+        if self._ui_built:
+            return
+
         FONT_TH = "TH Sarabun New"
         FONT_TITLE = (FONT_TH, 28, "bold")
         FONT_BTN = (FONT_TH, 18, "bold")
@@ -78,7 +100,8 @@ class PdfPreviewScreen(ctk.CTkFrame):
             command=self._on_back,
         ).pack(side="left")
 
-        ctk.CTkLabel(top, text=self.title_text, font=FONT_TITLE, text_color=WHITE).pack(side="left", expand=True)
+        self._title_label = ctk.CTkLabel(top, text=self.title_text, font=FONT_TITLE, text_color=WHITE)
+        self._title_label.pack(side="left", expand=True)
 
         ctk.CTkFrame(card, height=1, fg_color=HISTORY_LINE_COLOR).grid(row=1, column=0, sticky="ew", padx=24)
 
@@ -144,20 +167,60 @@ class PdfPreviewScreen(ctk.CTkFrame):
             command=self._save_pdf,
         ).pack(side="right")
 
+        self._ui_built = True
+
     def _render_current_page(self):
+        t0 = time.perf_counter()
         if not self.pdf_bytes or self.page_count == 0:
             self.preview_label.configure(text="ไม่พบข้อมูล PDF สำหรับแสดง preview", image=None)
             self.page_label.configure(text="หน้า 0/0")
             return
 
-        image = render_page(self.pdf_bytes, self.page_index, scale=1.6)
         max_w = max(400, self.winfo_width() - 180)
+        cache_key = (self.page_index, max_w)
+        cached = self._page_image_cache.get(cache_key)
+        if cached is None:
+            image = render_page(self.pdf_bytes, self.page_index, scale=1.6)
+            if image.width > max_w:
+                ratio = max_w / image.width
+                image = image.resize((int(image.width * ratio), int(image.height * ratio)))
+            cached = ImageTk.PhotoImage(image)
+            self._page_image_cache[cache_key] = cached
+
+        self._tk_img = cached
+        self.preview_label.configure(image=cached, text="")
+        self.page_label.configure(text=f"หน้า {self.page_index + 1}/{self.page_count}")
+        self.prev_btn.configure(state="normal" if self.page_index > 0 else "disabled")
+        self.next_btn.configure(state="normal" if self.page_index < (self.page_count - 1) else "disabled")
+
+        if self._perf_enabled:
+            print(
+                f"[PERF] PdfPreviewScreen._render_current_page "
+                f"page={self.page_index + 1}/{self.page_count} "
+                f"ms={(time.perf_counter() - t0) * 1000:.1f}"
+            )
+
+        # Warm up next page for smoother paging
+        if self.page_index + 1 < self.page_count:
+            next_key = (self.page_index + 1, max_w)
+            if next_key not in self._page_image_cache:
+                self.after(1, lambda: self._warm_cache_page(self.page_index + 1, max_w))
+
+    def _warm_cache_page(self, page_index: int, max_w: int):
+        if not self.pdf_bytes or self.page_count == 0:
+            return
+        cache_key = (page_index, max_w)
+        if cache_key in self._page_image_cache:
+            return
+        image = render_page(self.pdf_bytes, page_index, scale=1.6)
         if image.width > max_w:
             ratio = max_w / image.width
             image = image.resize((int(image.width * ratio), int(image.height * ratio)))
+        self._page_image_cache[cache_key] = ImageTk.PhotoImage(image)
 
-        self._tk_img = ImageTk.PhotoImage(image)
-        self.preview_label.configure(image=self._tk_img, text="")
+    def warmup(self):
+        # Hook for app preload; actual warmup occurs on_show when a PDF is provided.
+        return
         self.page_label.configure(text=f"หน้า {self.page_index + 1}/{self.page_count}")
         self.prev_btn.configure(state="normal" if self.page_index > 0 else "disabled")
         self.next_btn.configure(state="normal" if self.page_index < self.page_count - 1 else "disabled")

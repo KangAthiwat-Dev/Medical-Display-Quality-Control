@@ -53,6 +53,11 @@ class HistoryDetailScreen(ctk.CTkFrame):
         self._baseline_dialog = None
         self._baseline_selected = None
         self._baseline_rows = []
+        self._ui_built = False
+        self._meta_value_labels = {}
+        self._body = None
+        self._table_entries = []
+        self._empty_label = None
 
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(1, weight=1)
@@ -72,10 +77,8 @@ class HistoryDetailScreen(ctk.CTkFrame):
 
             self.evaluation = get_evaluation(evaluation_id)
             self.results = self._build_results()
-
-        for widget in self.main_frame.winfo_children():
-            widget.destroy()
         self._build_ui()
+        self._update_view()
 
     def _build_results(self):
         if not self.evaluation:
@@ -140,6 +143,9 @@ class HistoryDetailScreen(ctk.CTkFrame):
         return value, ""
 
     def _build_ui(self):
+        if self._ui_built:
+            return
+
         FONT_TH = "TH Sarabun New"
         FONT_TITLE = (FONT_TH, 30, "bold")
         FONT_META = (FONT_TH, 20, "bold")
@@ -149,11 +155,6 @@ class HistoryDetailScreen(ctk.CTkFrame):
         FONT_RESULT = (FONT_TH, 17, "bold")
         FONT_NOTE = (FONT_TH, 16)
         FONT_BTN = (FONT_TH, 18, "bold")
-
-        evaluation = self.evaluation or {}
-        test_date, test_time = self._format_datetime(evaluation.get("eval_datetime", ""))
-        display_label = DISPLAY_TYPE_LABELS.get(evaluation.get("screen_type", ""), evaluation.get("screen_type", ""))
-        period_label = PERIOD_LABELS.get(evaluation.get("period", ""), evaluation.get("period", ""))
 
         card = ctk.CTkFrame(self.main_frame, corner_radius=16, fg_color=HISTORY_CARD_COLOR)
         card.place(relx=0.5, rely=0.5, anchor="center", relwidth=0.92, relheight=0.92)
@@ -173,27 +174,31 @@ class HistoryDetailScreen(ctk.CTkFrame):
             meta_box.grid_columnconfigure(i, weight=1)
 
         top_meta = (
-            ("โรงพยาบาล", evaluation.get("hospital_name", "")),
-            ("ผู้ประเมิน", evaluation.get("evaluator_name", "")),
+            ("โรงพยาบาล", "hospital_name"),
+            ("ผู้ประเมิน", "evaluator_name"),
         )
         bottom_meta = (
-            ("ประเภทการประเมิน", f"{display_label} {period_label}".strip()),
-            ("หมายเลขครุภัณฑ์", evaluation.get("screen_model", "")),
-            ("วันที่", test_date),
-            ("เวลา", test_time),
+            ("ประเภทการประเมิน", "display_period"),
+            ("หมายเลขครุภัณฑ์", "screen_model"),
+            ("วันที่", "date"),
+            ("เวลา", "time"),
         )
 
-        for idx, (label, value) in enumerate(top_meta):
+        for idx, (label, key) in enumerate(top_meta):
             wrap = ctk.CTkFrame(meta_box, fg_color=TRANSPARENT)
             wrap.grid(row=0, column=idx, sticky="w", padx=24, pady=(14, 8))
             ctk.CTkLabel(wrap, text=label, font=FONT_META, text_color=WHITE).pack(side="left", padx=(0, 10))
-            ctk.CTkLabel(wrap, text=value, font=FONT_META, text_color=WHITE).pack(side="left")
+            value_lbl = ctk.CTkLabel(wrap, text="", font=FONT_META, text_color=WHITE)
+            value_lbl.pack(side="left")
+            self._meta_value_labels[key] = value_lbl
 
-        for idx, (label, value) in enumerate(bottom_meta):
+        for idx, (label, key) in enumerate(bottom_meta):
             wrap = ctk.CTkFrame(meta_box, fg_color=TRANSPARENT)
             wrap.grid(row=1, column=idx, sticky="w", padx=24, pady=(0, 14))
             ctk.CTkLabel(wrap, text=label, font=FONT_META, text_color=WHITE).pack(side="left", padx=(0, 10))
-            ctk.CTkLabel(wrap, text=value, font=FONT_META, text_color=WHITE).pack(side="left")
+            value_lbl = ctk.CTkLabel(wrap, text="", font=FONT_META, text_color=WHITE)
+            value_lbl.pack(side="left")
+            self._meta_value_labels[key] = value_lbl
 
         header = ctk.CTkFrame(card, fg_color=TRANSPARENT)
         header.grid(row=2, column=0, sticky="ew", padx=34)
@@ -223,72 +228,18 @@ class HistoryDetailScreen(ctk.CTkFrame):
         body.grid_columnconfigure(1, weight=2)
         body.grid_columnconfigure(2, weight=2)
         body.grid_anchor("nw")
+        self._body = body
 
-        r = 0
-        if not self._has_answer_data:
-            ctk.CTkLabel(
-                body,
-                text="รายการนี้ยังไม่มีข้อมูลผลรายข้อที่บันทึกไว้ในฐานข้อมูล",
-                font=FONT_ITEM,
-                text_color=HISTORY_TEXT_GRAY,
-                anchor="w",
-                justify="left",
-            ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(6, 12))
-            r += 1
-
-        for section in self.results:
-            ctk.CTkLabel(
-                body,
-                text=section.get("section_title", ""),
-                font=FONT_SECTION,
-                text_color=SECTION_BLUE,
-                anchor="w",
-                wraplength=600,
-                justify="left",
-            ).grid(row=r, column=0, columnspan=3, sticky="w", pady=(10, 6))
-            r += 1
-
-            for item in section.get("items", []):
-                passed = item.get("passed")
-                if passed is True:
-                    result_text = "✔ ผ่าน"
-                    result_color = PASS_GREEN
-                elif passed is False:
-                    result_text = "✘ ไม่ผ่าน"
-                    result_color = FAIL_RED
-                else:
-                    result_text = "-"
-                    result_color = HISTORY_TEXT_GRAY[0]
-
-                ctk.CTkLabel(
-                    body,
-                    text=item.get("title", ""),
-                    font=FONT_ITEM,
-                    text_color=WHITE,
-                    anchor="w",
-                    wraplength=620,
-                    justify="left",
-                ).grid(row=r, column=0, sticky="w", padx=(22, 8), pady=4)
-
-                ctk.CTkLabel(
-                    body,
-                    text=result_text,
-                    font=FONT_RESULT,
-                    text_color=result_color,
-                    anchor="w",
-                ).grid(row=r, column=1, sticky="w", padx=8, pady=4)
-
-                ctk.CTkLabel(
-                    body,
-                    text=item.get("note", ""),
-                    font=FONT_NOTE,
-                    text_color=WHITE,
-                    anchor="w",
-                    wraplength=260,
-                    justify="left",
-                ).grid(row=r, column=2, sticky="w", padx=8, pady=4)
-
-                r += 1
+        self._empty_label = ctk.CTkLabel(
+            body,
+            text="รายการนี้ยังไม่มีข้อมูลผลรายข้อที่บันทึกไว้ในฐานข้อมูล",
+            font=FONT_ITEM,
+            text_color=HISTORY_TEXT_GRAY,
+            anchor="w",
+            justify="left",
+        )
+        self._empty_label.grid(row=0, column=0, columnspan=3, sticky="w", pady=(6, 12))
+        self._empty_label.grid_remove()
 
         bottom = ctk.CTkFrame(card, fg_color=TRANSPARENT)
         bottom.grid(row=4, column=0, sticky="ew", padx=34, pady=(8, 20))
@@ -331,6 +282,165 @@ class HistoryDetailScreen(ctk.CTkFrame):
             text_color=WHITE,
             command=self._on_baseline,
         ).pack(side="right", padx=(0, 12))
+
+        self._ui_built = True
+
+    def _flatten_results(self):
+        """Return a flat list of entries to render in the table."""
+        entries = []
+        for section in self.results or []:
+            entries.append(("section", {"title": section.get("section_title", "")}))
+            for item in section.get("items", []) or []:
+                entries.append(("item", item))
+        return entries
+
+    def _ensure_table_entry(self, kind: str, idx: int):
+        """Create table entry widgets lazily and reuse them."""
+        if self._body is None:
+            return None
+
+        # Expand pool
+        while len(self._table_entries) <= idx:
+            self._table_entries.append(None)
+
+        if self._table_entries[idx] is not None and self._table_entries[idx].get("kind") == kind:
+            return self._table_entries[idx]
+
+        # If kind changed, remove old widgets (rare; but keep simple)
+        old = self._table_entries[idx]
+        if old:
+            for w in old.get("widgets", []):
+                w.destroy()
+
+        FONT_TH = "TH Sarabun New"
+        FONT_SECTION = (FONT_TH, 19, "bold")
+        FONT_ITEM = (FONT_TH, 17, "bold")
+        FONT_RESULT = (FONT_TH, 17, "bold")
+        FONT_NOTE = (FONT_TH, 16)
+
+        widgets = []
+        if kind == "section":
+            title_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
+                font=FONT_SECTION,
+                text_color=SECTION_BLUE,
+                anchor="w",
+                wraplength=600,
+                justify="left",
+            )
+            widgets = [title_lbl]
+            entry = {"kind": kind, "title": title_lbl, "widgets": widgets}
+        else:
+            title_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
+                font=FONT_ITEM,
+                text_color=WHITE,
+                anchor="w",
+                wraplength=620,
+                justify="left",
+            )
+            result_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
+                font=FONT_RESULT,
+                text_color=WHITE,
+                anchor="w",
+            )
+            note_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
+                font=FONT_NOTE,
+                text_color=WHITE,
+                anchor="w",
+                wraplength=260,
+                justify="left",
+            )
+            widgets = [title_lbl, result_lbl, note_lbl]
+            entry = {
+                "kind": kind,
+                "title": title_lbl,
+                "result": result_lbl,
+                "note": note_lbl,
+                "widgets": widgets,
+            }
+
+        self._table_entries[idx] = entry
+        return entry
+
+    def _update_view(self):
+        if not self._ui_built:
+            return
+
+        evaluation = self.evaluation or {}
+        test_date, test_time = self._format_datetime(evaluation.get("eval_datetime", ""))
+        display_label = DISPLAY_TYPE_LABELS.get(evaluation.get("screen_type", ""), evaluation.get("screen_type", ""))
+        period_label = PERIOD_LABELS.get(evaluation.get("period", ""), evaluation.get("period", ""))
+
+        display_period = f"{display_label} {period_label}".strip()
+
+        values = {
+            "hospital_name": evaluation.get("hospital_name", ""),
+            "evaluator_name": evaluation.get("evaluator_name", ""),
+            "display_period": display_period,
+            "screen_model": evaluation.get("screen_model", ""),
+            "date": test_date,
+            "time": test_time,
+        }
+        for key, lbl in self._meta_value_labels.items():
+            lbl.configure(text=values.get(key, ""))
+
+        # Table
+        if not self._has_answer_data:
+            if self._empty_label:
+                self._empty_label.grid()
+            for entry in self._table_entries:
+                if not entry:
+                    continue
+                for w in entry.get("widgets", []):
+                    w.grid_remove()
+            return
+
+        if self._empty_label:
+            self._empty_label.grid_remove()
+
+        entries = self._flatten_results()
+        for i, (kind, payload) in enumerate(entries):
+            entry = self._ensure_table_entry(kind, i)
+            if not entry:
+                continue
+
+            if kind == "section":
+                entry["title"].configure(text=payload.get("title", ""))
+                entry["title"].grid(row=i, column=0, columnspan=3, sticky="w", pady=(10, 6))
+            else:
+                passed = payload.get("passed")
+                if passed is True:
+                    result_text = "✔ ผ่าน"
+                    result_color = PASS_GREEN
+                elif passed is False:
+                    result_text = "✘ ไม่ผ่าน"
+                    result_color = FAIL_RED
+                else:
+                    result_text = "-"
+                    result_color = HISTORY_TEXT_GRAY[0]
+
+                entry["title"].configure(text=payload.get("title", ""))
+                entry["result"].configure(text=result_text, text_color=result_color)
+                entry["note"].configure(text=payload.get("note", ""))
+
+                entry["title"].grid(row=i, column=0, sticky="w", padx=(22, 8), pady=4)
+                entry["result"].grid(row=i, column=1, sticky="w", padx=8, pady=4)
+                entry["note"].grid(row=i, column=2, sticky="w", padx=8, pady=4)
+
+        # Hide remaining pooled widgets
+        for j in range(len(entries), len(self._table_entries)):
+            entry = self._table_entries[j]
+            if not entry:
+                continue
+            for w in entry.get("widgets", []):
+                w.grid_remove()
 
     def _on_back(self):
         if self.back_command:

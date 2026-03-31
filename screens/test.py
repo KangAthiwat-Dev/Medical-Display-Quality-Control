@@ -1,3 +1,5 @@
+import os
+import time
 import tkinter as tk
 import customtkinter as ctk
 from PIL import ImageTk
@@ -70,6 +72,9 @@ class TestScreen(ctk.CTkFrame):
         super().__init__(master, **kw)
         self.app = master
         self._back = back_command
+        self._perf_enabled = os.environ.get("MEDICAL_PERF", "").strip() not in ("", "0", "false", "False")
+        self._cache_target_size = (1920, 1080)
+        self._sequence_image_cache = {}  # (frame_path, w, h) -> ImageTk.PhotoImage
 
         # state
         self._items = []
@@ -467,18 +472,68 @@ class TestScreen(ctk.CTkFrame):
             state["playing"] = False
 
     def _refresh_sequence_canvas(self, item):
+        t0 = time.perf_counter()
         state = self._get_sequence_state(item)
         frame_path = state["frame_paths"][state["current_index"]]
 
         self.update_idletasks()
-        cw = self._canvas.winfo_width() or 1920
-        ch = self._canvas.winfo_height() or 1080
+        cw = self._canvas.winfo_width() or self._cache_target_size[0]
+        ch = self._canvas.winfo_height() or self._cache_target_size[1]
 
-        pil_img = load_pattern_sequence_frame(frame_path, cw, ch)
-        self._tk_img = ImageTk.PhotoImage(pil_img)
+        cache_key = (frame_path, cw, ch)
+        cached = self._sequence_image_cache.get(cache_key)
+        if cached is None:
+            pil_img = load_pattern_sequence_frame(frame_path, cw, ch)
+            cached = ImageTk.PhotoImage(pil_img)
+            self._sequence_image_cache[cache_key] = cached
+        self._tk_img = cached
 
         self._canvas.delete("all")
-        self._canvas.create_image(0, 0, anchor="nw", image=self._tk_img)
+        self._canvas.create_image(0, 0, anchor="nw", image=cached)
+
+        if self._perf_enabled:
+            print(
+                f"[PERF] TestScreen._refresh_sequence_canvas "
+                f"item={item.get('item_id')} "
+                f"ms={(time.perf_counter() - t0) * 1000:.1f}"
+            )
+
+    def warmup(self):
+        """Preload sequence frames into memory for runtime smoothness."""
+        t0 = time.perf_counter()
+        cw, ch = self._cache_target_size
+        warmed = 0
+
+        for dtype, periods in (TEST_CONFIG or {}).items():
+            if not isinstance(periods, dict):
+                continue
+            for period, groups in periods.items():
+                if not isinstance(groups, list):
+                    continue
+                for g in groups:
+                    for item in (g.get("items") or []):
+                        item_id = item.get("item_id")
+                        if not item_id:
+                            continue
+                        if not has_pattern_sequence(dtype, period, item_id):
+                            continue
+                        frame_paths = get_pattern_sequence_frames(dtype, period, item_id)
+                        for fp in frame_paths:
+                            key = (fp, cw, ch)
+                            if key in self._sequence_image_cache:
+                                continue
+                            try:
+                                pil_img = load_pattern_sequence_frame(fp, cw, ch)
+                                self._sequence_image_cache[key] = ImageTk.PhotoImage(pil_img)
+                                warmed += 1
+                            except Exception:
+                                continue
+
+        if self._perf_enabled:
+            print(
+                f"[PERF] TestScreen.warmup frames={warmed} "
+                f"ms={(time.perf_counter() - t0) * 1000:.1f}"
+            )
 
     def _get_current_sequence_level(self, item) -> str:
         state = self._get_sequence_state(item)

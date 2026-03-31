@@ -1,4 +1,6 @@
 import os
+import platform
+import time
 import customtkinter as ctk
 
 from constants.evaluation_questions import TEST_CONFIG
@@ -28,15 +30,28 @@ ctk.FontManager.load_font(font_path)
 class App(ctk.CTk):
     def __init__(self):
         super().__init__()
+        self._perf_enabled = os.environ.get("MEDICAL_PERF", "").strip() not in ("", "0", "false", "False")
+        self._perf_last_screen = None
         self.title("Medical Display Quality Control")
         
-        # เปิดหน้าต่างแบบเต็มจอ (True Fullscreen)
-        self.attributes("-fullscreen", True)
-        # กดปุ่ม Escape เพื่อออกจากโหมดเต็มจอ
-        self.bind("<Escape>", lambda event: self.attributes("-fullscreen", False))
+        system = platform.system()
+        if system == "Windows":
+            # ✅ เต็มพื้นที่แบบเสถียร (เหมือน maximize)
+            self.state("zoomed")
+
+        elif system == "Darwin":  # macOS
+            # ✅ fullscreen จริง (ไม่มี menu bar)
+            self.attributes("-fullscreen", True)
+
+        elif system == "Linux":
+            # Linux บาง distro fullscreen เพี้ยน → ใช้ zoomed ก่อน
+            try:
+                self.state("zoomed")
+            except:
+                self.attributes("-fullscreen", True)
         
-        self.resizable(width=True, height=True)
-        self.minsize(width=1024, height=768)
+        self.resizable(width=False, height=False)
+        self.minsize(width=1280, height=720)
         self.configure(fg_color=("#F0F0F0", "#222222"))
 
         # Configure grid layout
@@ -45,9 +60,38 @@ class App(ctk.CTk):
 
         # Register screens
         self.register_screens()
+        self._preload_screens()
 
         # Show home screen
         self.show_screen("home")
+
+    def _perf_log(self, message: str):
+        if self._perf_enabled:
+            print(f"[PERF] {message}")
+
+    def _preload_screens(self):
+        """Pre-create all screens at startup (trade startup time for runtime speed)."""
+        t0 = time.perf_counter()
+        for name, factory in (self.screen_definitions or {}).items():
+            if name in self.screens:
+                continue
+            try:
+                self.screens[name] = factory(master=self)
+            except TypeError:
+                # Some factories may not accept master as kwarg
+                self.screens[name] = factory(self)
+
+        # Optional warmup hook (implemented per-screen where needed)
+        for s in self.screens.values():
+            if hasattr(s, "warmup"):
+                try:
+                    s.warmup()
+                except Exception:
+                    # Warmup must never block app startup due to incidental failures
+                    pass
+
+        if self._perf_enabled:
+            self._perf_log(f"preload_screens count={len(self.screens)} ms={(time.perf_counter() - t0) * 1000:.1f}")
 
     def handle_login(self, username, password):
         # ดึงฟังก์ชันเช็ครหัสผ่านที่เราเพิ่งทำไปมาใช้
@@ -79,10 +123,6 @@ class App(ctk.CTk):
                 master,
                 back_command=self.go_back,
                 next_command=self.handle_start_test
-            ),
-            "test_runner": lambda master: TestRunnerScreen(
-                master,
-                back_command=self.go_back,
             ),
             "test": lambda master: TestScreen(
                 master,
@@ -556,6 +596,7 @@ class App(ctk.CTk):
 
     # Show function
     def show_screen(self, screen_name: str, bypass_auth=False, is_back=False, **kwargs):
+        t0_total = time.perf_counter()
         # ── INTERCEPT PROTECTED ROUTES ── (ดักทุกหน้าต่างที่ต้องใช้สิทธิผู้ประเมิน)
         protected_routes = ["history", "history_hook", "evaluator_list", "evaluator_list_hook", "select_type", "evaluator_edit"]
         if screen_name in protected_routes and not bypass_auth:
@@ -583,32 +624,61 @@ class App(ctk.CTk):
                 if not self.history or self.history[-1] != self.current_screen:
                     self.history.append(self.current_screen)
 
+        prev_screen_name = getattr(self, "current_screen", None)
         self.current_screen = screen_name
 
         # Lazy Loading
+        t0_lazy = time.perf_counter()
         if screen_name not in self.screens:
             if screen_name in self.screen_definitions:
                 self.screens[screen_name] = self.screen_definitions[screen_name](master=self)
             else:
                 print(f"Error: Screen '{screen_name}' not registered.")
                 return
+        t1_lazy = time.perf_counter()
 
         screen = self.screens[screen_name]
         screen.grid(row=0, column=0, sticky="nsew")
         screen.lift()
         
         # Lifecycle: on_show
+        t0_show = time.perf_counter()
         if hasattr(screen, "on_show"):
             screen.on_show(**kwargs)
+        t1_show = time.perf_counter()
             
+        t0_idle = time.perf_counter()
         self.update_idletasks()
+        t1_idle = time.perf_counter()
         
-        # ซ่อนหน้าอื่นๆ ที่ถูกสร้างขึ้นมาแล้ว
+        # Hide previous screen (and call its on_hide only)
+        t0_hide = time.perf_counter()
+        prev_screen = self.screens.get(prev_screen_name) if prev_screen_name else None
+        if prev_screen is not None and prev_screen is not screen:
+            if hasattr(prev_screen, "on_hide"):
+                prev_screen.on_hide()
+            prev_screen.grid_forget()
+
+        # Hide all other screens without triggering lifecycle work
         for s in self.screens.values():
-            if s is not screen:
-                if hasattr(s, "on_hide"):
-                    s.on_hide()
-                s.grid_forget()
+            if s is screen or s is prev_screen:
+                continue
+            s.grid_forget()
+        t1_hide = time.perf_counter()
+
+        t1_total = time.perf_counter()
+        if self._perf_enabled:
+            created = "hit" if (t1_lazy - t0_lazy) < 0.0005 else "miss"
+            self._perf_log(
+                "screen="
+                f"{screen_name} prev={prev_screen_name} "
+                f"lazy={created} "
+                f"lazy_ms={(t1_lazy - t0_lazy) * 1000:.1f} "
+                f"on_show_ms={(t1_show - t0_show) * 1000:.1f} "
+                f"idle_ms={(t1_idle - t0_idle) * 1000:.1f} "
+                f"hide_ms={(t1_hide - t0_hide) * 1000:.1f} "
+                f"total_ms={(t1_total - t0_total) * 1000:.1f}"
+            )
 
 if __name__ == "__main__":
     app = App()
