@@ -16,6 +16,7 @@ class AdminLoginScreen(ctk.CTkFrame):
             os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
             "assets",
         )
+        self._admin_icon = None
 
         self.grid_rowconfigure(0, weight=0)
         self.grid_rowconfigure(1, weight=1)
@@ -60,33 +61,33 @@ class AdminLoginScreen(ctk.CTkFrame):
             return None
 
     def _build_form(self):
-        FONT_TITLE = ("TH Sarabun New", 38, "bold")
-        FONT_LABEL = ("TH Sarabun New", 21, "bold")
-        FONT_ENTRY = ("TH Sarabun New", 20)
-        FONT_BTN = ("TH Sarabun New", 24, "bold")
-        ENTRY_COLOR = ("#F4F4F4", "#F4F4F4")
-        TEXT_DARK = ("#1A1A1A", "#1A1A1A")
-        ACCENT = "#3F67C6"
+        font_title = ("TH Sarabun New", 38, "bold")
+        font_label = ("TH Sarabun New", 21, "bold")
+        font_entry = ("TH Sarabun New", 20)
+        font_btn = ("TH Sarabun New", 24, "bold")
+        entry_color = ("#F4F4F4", "#F4F4F4")
+        text_dark = ("#1A1A1A", "#1A1A1A")
+        accent = "#3F67C6"
 
         wrapper = ctk.CTkFrame(self.card, fg_color="transparent")
         wrapper.place(relx=0.5, rely=0.5, anchor="center")
 
-        admin_icon = self._load_icon("admin-panel_d.png", (58, 58))
-        icon_label = ctk.CTkLabel(wrapper, text="", image=admin_icon)
-        icon_label.image = admin_icon
+        self._admin_icon = self._load_icon("admin-panel_d.png", (58, 58))
+        icon_label = ctk.CTkLabel(wrapper, text="", image=self._admin_icon)
+        icon_label.image = self._admin_icon
         icon_label.pack(pady=(0, 14))
 
         ctk.CTkLabel(
             wrapper,
             text="Admin Login",
-            font=FONT_TITLE,
+            font=font_title,
             text_color="white",
         ).pack(pady=(0, 20))
 
         ctk.CTkLabel(
             wrapper,
             text="Username",
-            font=FONT_LABEL,
+            font=font_label,
             text_color="#F0F0F0",
             anchor="w",
         ).pack(fill="x", padx=20)
@@ -94,12 +95,12 @@ class AdminLoginScreen(ctk.CTkFrame):
         self.username_entry = ctk.CTkEntry(
             wrapper,
             placeholder_text="Username",
-            font=FONT_ENTRY,
+            font=font_entry,
             height=58,
             width=720,
             corner_radius=29,
-            fg_color=ENTRY_COLOR,
-            text_color=TEXT_DARK,
+            fg_color=entry_color,
+            text_color=text_dark,
             placeholder_text_color="#B0B0B0",
             border_width=2,
             border_color="#D6D6D6",
@@ -109,7 +110,7 @@ class AdminLoginScreen(ctk.CTkFrame):
         ctk.CTkLabel(
             wrapper,
             text="Password",
-            font=FONT_LABEL,
+            font=font_label,
             text_color="#F0F0F0",
             anchor="w",
         ).pack(fill="x", padx=20)
@@ -117,12 +118,12 @@ class AdminLoginScreen(ctk.CTkFrame):
         self.password_entry = ctk.CTkEntry(
             wrapper,
             placeholder_text="Password",
-            font=FONT_ENTRY,
+            font=font_entry,
             height=58,
             width=720,
             corner_radius=29,
-            fg_color=ENTRY_COLOR,
-            text_color=TEXT_DARK,
+            fg_color=entry_color,
+            text_color=text_dark,
             placeholder_text_color="#B0B0B0",
             border_width=2,
             border_color="#D6D6D6",
@@ -141,11 +142,11 @@ class AdminLoginScreen(ctk.CTkFrame):
         self.login_btn = ctk.CTkButton(
             wrapper,
             text="เข้าสู่ระบบ",
-            font=FONT_BTN,
+            font=font_btn,
             height=58,
             width=720,
             corner_radius=12,
-            fg_color=ACCENT,
+            fg_color=accent,
             hover_color="#355AB0",
             text_color="white",
             command=self._on_login,
@@ -154,6 +155,11 @@ class AdminLoginScreen(ctk.CTkFrame):
 
         self.username_entry.bind("<Return>", lambda _e: self.password_entry.focus())
         self.password_entry.bind("<Return>", lambda _e: self._on_login())
+
+    def _clear_form(self):
+        self.username_entry.delete(0, "end")
+        self.password_entry.delete(0, "end")
+        self.error_label.configure(text="")
 
     def _on_login(self):
         username = self.username_entry.get().strip()
@@ -173,7 +179,9 @@ class AdminLoginScreen(ctk.CTkFrame):
     def show_error(self, message: str):
         self.error_label.configure(text=f"⚠ {message}")
 
-    def on_hide(self):
-        self.username_entry.delete(0, "end")
-        self.password_entry.delete(0, "end")
+    def on_show(self, **kwargs):
         self.error_label.configure(text="")
+        self.after(0, self.username_entry.focus)
+
+    def on_hide(self):
+        self._clear_form()
