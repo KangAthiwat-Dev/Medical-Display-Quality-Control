@@ -44,11 +44,19 @@ class ComparisonScreen(ctk.CTkFrame):
         self.baseline_evaluation = None
         self.rows_data = []
 
+        self._ui_built = False
+        self._meta_value_labels = {}
+        self._body = None
+        self._empty_label = None
+        self._table_entries = []
+
         self.grid_rowconfigure(0, weight=1)
         self.grid_columnconfigure(0, weight=1)
 
         self.main_frame = ctk.CTkFrame(self, fg_color=TRANSPARENT)
         self.main_frame.grid(row=0, column=0, sticky="nsew")
+
+        self._build_ui()
 
     def on_show(self, current_evaluation=None, baseline_evaluation=None, **kwargs):
         if current_evaluation is not None:
@@ -57,10 +65,8 @@ class ComparisonScreen(ctk.CTkFrame):
             self.baseline_evaluation = baseline_evaluation
 
         self.rows_data = self._build_rows()
-
-        for widget in self.main_frame.winfo_children():
-            widget.destroy()
         self._build_ui()
+        self._update_view()
 
     def _build_rows(self):
         current = self.current_evaluation or {}
@@ -98,6 +104,9 @@ class ComparisonScreen(ctk.CTkFrame):
         return rows
 
     def _build_ui(self):
+        if self._ui_built:
+            return
+
         FONT_TH = "TH Sarabun New"
         FONT_TITLE = (FONT_TH, 30, "bold")
         FONT_META = (FONT_TH, 20, "bold")
@@ -139,23 +148,27 @@ class ComparisonScreen(ctk.CTkFrame):
         meta_box = ctk.CTkFrame(card, corner_radius=18, fg_color=HEADER_BG)
         meta_box.grid(row=1, column=0, sticky="ew", padx=34, pady=(0, 14))
 
-        ctk.CTkLabel(
+        baseline_lbl = ctk.CTkLabel(
             meta_box,
-            text=self._compose_meta_line(self.baseline_evaluation, prefix="Baseline"),
+            text="",
             font=FONT_META,
             text_color=WHITE,
             anchor="w",
             justify="left",
-        ).grid(row=0, column=0, sticky="w", padx=24, pady=(14, 6))
+        )
+        baseline_lbl.grid(row=0, column=0, sticky="w", padx=24, pady=(14, 6))
+        self._meta_value_labels["baseline"] = baseline_lbl
 
-        ctk.CTkLabel(
+        current_lbl = ctk.CTkLabel(
             meta_box,
-            text=self._compose_meta_line(self.current_evaluation, prefix="ครั้งนี้"),
+            text="",
             font=FONT_META,
             text_color=WHITE,
             anchor="w",
             justify="left",
-        ).grid(row=1, column=0, sticky="w", padx=24, pady=(0, 14))
+        )
+        current_lbl.grid(row=1, column=0, sticky="w", padx=24, pady=(0, 14))
+        self._meta_value_labels["current"] = current_lbl
 
         header = ctk.CTkFrame(card, fg_color=TRANSPARENT)
         header.grid(row=2, column=0, sticky="ew", padx=34)
@@ -196,82 +209,17 @@ class ComparisonScreen(ctk.CTkFrame):
         body.grid_columnconfigure(3, weight=4)
         body.grid_columnconfigure(4, weight=4)
         body.grid_anchor("nw")
+        self._body = body
 
-        r = 0
-        if not self.rows_data:
-            ctk.CTkLabel(
-                body,
-                text="ยังไม่มีข้อมูลสำหรับเปรียบเทียบ Baseline",
-                font=FONT_ITEM,
-                text_color=HISTORY_TEXT_GRAY,
-                anchor="w",
-            ).grid(row=r, column=0, columnspan=5, sticky="w", pady=(6, 12))
-            r += 1
-
-        for section in self.rows_data:
-            ctk.CTkLabel(
-                body,
-                text=section.get("section_title", ""),
-                font=FONT_SECTION,
-                text_color=SECTION_BLUE,
-                anchor="w",
-                wraplength=820,
-                justify="left",
-            ).grid(row=r, column=0, columnspan=5, sticky="w", pady=(8, 6))
-            r += 1
-
-            for item in section.get("items", []):
-                ctk.CTkLabel(
-                    body,
-                    text=item.get("title", ""),
-                    font=FONT_ITEM,
-                    text_color=WHITE,
-                    anchor="w",
-                    wraplength=320,
-                    justify="left",
-                ).grid(row=r, column=0, sticky="nw", padx=(0, 10), pady=4)
-
-                ctk.CTkLabel(
-                    body,
-                    text=item.get("baseline_text", "-"),
-                    font=FONT_CELL,
-                    text_color=WHITE,
-                    anchor="w",
-                    wraplength=160,
-                    justify="left",
-                ).grid(row=r, column=1, sticky="nw", padx=8, pady=4)
-
-                ctk.CTkLabel(
-                    body,
-                    text=item.get("current_text", "-"),
-                    font=FONT_CELL,
-                    text_color=WHITE,
-                    anchor="w",
-                    wraplength=160,
-                    justify="left",
-                ).grid(row=r, column=2, sticky="nw", padx=8, pady=4)
-
-                ctk.CTkLabel(
-                    body,
-                    text=item.get("compare_text", "-"),
-                    font=FONT_CELL,
-                    text_color=WHITE,
-                    anchor="w",
-                    wraplength=260,
-                    justify="left",
-                ).grid(row=r, column=3, sticky="nw", padx=8, pady=4)
-
-                ctk.CTkLabel(
-                    body,
-                    text=item.get("description", "-"),
-                    font=FONT_DESC,
-                    text_color=WHITE,
-                    anchor="w",
-                    wraplength=320,
-                    justify="left",
-                ).grid(row=r, column=4, sticky="nw", padx=8, pady=4)
-
-                r += 1
+        self._empty_label = ctk.CTkLabel(
+            body,
+            text="ยังไม่มีข้อมูลสำหรับเปรียบเทียบ Baseline",
+            font=FONT_ITEM,
+            text_color=HISTORY_TEXT_GRAY,
+            anchor="w",
+        )
+        self._empty_label.grid(row=0, column=0, columnspan=5, sticky="w", pady=(6, 12))
+        self._empty_label.grid_remove()
 
         bottom = ctk.CTkFrame(card, fg_color=TRANSPARENT)
         bottom.grid(row=4, column=0, sticky="ew", padx=34, pady=(8, 20))
@@ -301,6 +249,168 @@ class ComparisonScreen(ctk.CTkFrame):
             text_color=WHITE,
             command=self._on_export,
         ).pack(side="right")
+
+        self._ui_built = True
+
+    def _flatten_rows(self):
+        entries = []
+        for section in self.rows_data or []:
+            entries.append(("section", {"title": section.get("section_title", "")}))
+            for item in section.get("items", []) or []:
+                entries.append(("item", item))
+        return entries
+
+    def _ensure_table_entry(self, kind: str, idx: int):
+        if self._body is None:
+            return None
+
+        while len(self._table_entries) <= idx:
+            self._table_entries.append(None)
+
+        current = self._table_entries[idx]
+        if current is not None and current.get("kind") == kind:
+            return current
+
+        if current:
+            for widget in current.get("widgets", []):
+                widget.destroy()
+
+        FONT_TH = "TH Sarabun New"
+        FONT_SECTION = (FONT_TH, 19, "bold")
+        FONT_ITEM = (FONT_TH, 17, "bold")
+        FONT_CELL = (FONT_TH, 17, "bold")
+        FONT_DESC = (FONT_TH, 16)
+
+        widgets = []
+        if kind == "section":
+            title_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
+                font=FONT_SECTION,
+                text_color=SECTION_BLUE,
+                anchor="w",
+                wraplength=820,
+                justify="left",
+            )
+            widgets = [title_lbl]
+            entry = {"kind": kind, "title": title_lbl, "widgets": widgets}
+        else:
+            title_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
+                font=FONT_ITEM,
+                text_color=WHITE,
+                anchor="w",
+                wraplength=320,
+                justify="left",
+            )
+            baseline_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
+                font=FONT_CELL,
+                text_color=WHITE,
+                anchor="w",
+                wraplength=160,
+                justify="left",
+            )
+            current_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
+                font=FONT_CELL,
+                text_color=WHITE,
+                anchor="w",
+                wraplength=160,
+                justify="left",
+            )
+            compare_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
+                font=FONT_CELL,
+                text_color=WHITE,
+                anchor="w",
+                wraplength=260,
+                justify="left",
+            )
+            desc_lbl = ctk.CTkLabel(
+                self._body,
+                text="",
+                font=FONT_DESC,
+                text_color=WHITE,
+                anchor="w",
+                wraplength=320,
+                justify="left",
+            )
+            widgets = [title_lbl, baseline_lbl, current_lbl, compare_lbl, desc_lbl]
+            entry = {
+                "kind": kind,
+                "title": title_lbl,
+                "baseline": baseline_lbl,
+                "current": current_lbl,
+                "compare": compare_lbl,
+                "description": desc_lbl,
+                "widgets": widgets,
+            }
+
+        self._table_entries[idx] = entry
+        return entry
+
+    def _update_view(self):
+        if not self._ui_built:
+            return
+
+        self._meta_value_labels["baseline"].configure(
+            text=self._compose_meta_line(self.baseline_evaluation, prefix="Baseline")
+        )
+        self._meta_value_labels["current"].configure(
+            text=self._compose_meta_line(self.current_evaluation, prefix="ครั้งนี้")
+        )
+
+        entries = self._flatten_rows()
+        if not entries:
+            if self._empty_label:
+                self._empty_label.grid()
+            for entry in self._table_entries:
+                if not entry:
+                    continue
+                for widget in entry.get("widgets", []):
+                    widget.grid_remove()
+            if self._body is not None:
+                self.after(0, lambda: self._body._parent_canvas.yview_moveto(0))
+            return
+
+        if self._empty_label:
+            self._empty_label.grid_remove()
+
+        for i, (kind, payload) in enumerate(entries):
+            entry = self._ensure_table_entry(kind, i)
+            if not entry:
+                continue
+
+            if kind == "section":
+                entry["title"].configure(text=payload.get("title", ""))
+                entry["title"].grid(row=i, column=0, columnspan=5, sticky="w", pady=(8, 6))
+            else:
+                entry["title"].configure(text=payload.get("title", ""))
+                entry["baseline"].configure(text=payload.get("baseline_text", "-"))
+                entry["current"].configure(text=payload.get("current_text", "-"))
+                entry["compare"].configure(text=payload.get("compare_text", "-"))
+                entry["description"].configure(text=payload.get("description", "-"))
+
+                entry["title"].grid(row=i, column=0, sticky="nw", padx=(0, 10), pady=4)
+                entry["baseline"].grid(row=i, column=1, sticky="nw", padx=8, pady=4)
+                entry["current"].grid(row=i, column=2, sticky="nw", padx=8, pady=4)
+                entry["compare"].grid(row=i, column=3, sticky="nw", padx=8, pady=4)
+                entry["description"].grid(row=i, column=4, sticky="nw", padx=8, pady=4)
+
+        for j in range(len(entries), len(self._table_entries)):
+            entry = self._table_entries[j]
+            if not entry:
+                continue
+            for widget in entry.get("widgets", []):
+                widget.grid_remove()
+
+        if self._body is not None:
+            self.after(0, lambda: self._body._parent_canvas.yview_moveto(0))
 
     def _compose_meta_line(self, evaluation, prefix):
         if not evaluation:
