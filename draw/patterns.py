@@ -211,7 +211,7 @@ def _draw_18_patches(img, screen_w, screen_h, sf, show_numbers=True, show_border
     # 1. หาจุดกึ่งกลางหน้าจอแนวนอน
     center_x = screen_w // 2
     # 2. กำหนดระยะห่างระหว่างกล่องดำกับกล่องขาว (ตรงกลาง)
-    center_gap = int(screen_w * 0.02) # นายน้อยเพิ่มลดเลข 0.02 เพื่อปรับความห่างได้ครับ
+    center_gap = int(screen_w * 0.02)
     # 3. คำนวณตำแหน่งแนวนอน (X) ใหม่ให้อยู่โซนกลาง
     bx = center_x - box_w - (center_gap // 2) # กล่องดำอยู่ซ้ายของจุดกึ่งกลาง
     wx = center_x + (center_gap // 2)         # กล่องขาวอยู่ขวาของจุดกึ่งกลาง

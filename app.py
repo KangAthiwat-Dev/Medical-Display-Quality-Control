@@ -3,6 +3,7 @@ import platform
 import time
 import customtkinter as ctk
 
+from PIL import Image, ImageTk
 from constants.evaluation_questions import TEST_CONFIG
 from screens.home import HomeScreen
 from screens.select_type import SelectTypeScreen
@@ -22,6 +23,8 @@ from screens.instructions import InstructionsScreen
 from screens.test import TestScreen
 from screens.research_results import ResultScreen
 
+print("PID:", os.getpid())
+
 # Load font
 here = os.path.dirname(os.path.abspath(__file__))
 font_path = os.path.join(here, "assets", "fonts", "THSarabunNew.ttf")
@@ -34,10 +37,24 @@ class App(ctk.CTk):
         self._perf_last_screen = None
         self._preload_enabled = os.environ.get("MEDICAL_PRELOAD_SCREENS", "").strip() in ("1", "true", "True")
         self.title("Medical Display Quality Control")
+
+        base_dir = os.path.dirname(os.path.abspath(__file__))
+
+        try:
+            if platform.system() == "Windows":
+                ico_path = os.path.join(base_dir, "assets", "logo", "logo-darkmode.png")
+                self.iconbitmap(ico_path)
+            else:
+                png_path = os.path.join(base_dir, "assets", "logo", "logo-darkmode.png")
+                icon_image = Image.open(png_path)
+                self._app_icon = ImageTk.PhotoImage(icon_image)
+                self.iconphoto(True, self._app_icon)
+        except Exception as e:
+            print("icon load error:", e)
         
         system = platform.system()
         if system == "Windows":
-            # ✅ เต็มพื้นที่แบบเสถียร (เหมือน maximize)
+            # ✅ เต็มพื้นที่แบบเสถียร
             self.state("zoomed")
 
         elif system == "Darwin":  # macOS
@@ -51,7 +68,7 @@ class App(ctk.CTk):
             except:
                 self.attributes("-fullscreen", True)
         
-        self.resizable(width=False, height=False)
+        self.resizable(width=True, height=True)
         self.minsize(width=1280, height=720)
         self.configure(fg_color=("#F0F0F0", "#222222"))
 
